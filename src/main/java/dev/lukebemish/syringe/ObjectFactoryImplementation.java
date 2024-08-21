@@ -5,9 +5,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -93,25 +91,28 @@ class ObjectFactoryImplementation implements ObjectFactory {
     @Override
     public <T> T newInstance(Class<T> clazz, Object... argumentValues) {
         var creator = creators.computeIfAbsent(clazz, InjectedImplementation::implement);
-        var targetParams = creator.constructor().type().parameterArray();
-        List<Object> args = new ArrayList<>(creator.injections().size());
+        var targetParams = creator.constructor().handle().type().parameterArray();
+        Object[] args = new Object[targetParams.length];
         int i = 0;
         for (var argValue : argumentValues) {
-            args.add(argValue);
             if (i >= targetParams.length) {
                 throw new IllegalArgumentException("Expected at most " + targetParams.length + " arguments, recieved " + argumentValues.length);
             }
+            args[i] = argValue;
             if (!targetParams[i].isAssignableFrom(argValue.getClass())) {
                 throw new IllegalArgumentException("Expected argument " + i + " to be of type " + targetParams[i] + ", recieved " + argValue.getClass());
             }
             i++;
         }
         while (i < targetParams.length) {
-            args.add(getServiceOfType(creator.injections().get(i)));
+            args[i] = getServiceOfType(creator.injections().get(i));
+            if (!targetParams[i].isAssignableFrom(args[i].getClass())) {
+                throw new IllegalArgumentException("Expected argument " + i + " to be of type " + targetParams[i] + ", recieved " + args[i].getClass());
+            }
             i++;
         }
         try {
-            return clazz.cast(creator.constructor().invokeWithArguments(args));
+            return clazz.cast(creator.constructor().invoke(args));
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }

@@ -7,7 +7,6 @@ import org.apache.commons.lang3.reflect.TypeUtils;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 
-import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.AccessFlag;
@@ -23,7 +22,7 @@ import java.util.List;
 import java.util.SequencedSet;
 import java.util.function.Function;
 
-record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
+record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
     private static final String ATTACHMENT_MODULE = "dev.lukebemish.syringe.attachment";
     private static final String ATTACHMENT_TARGET_NAME = "dev.lukebemish.syringe.attachment.AttachmentTarget";
 
@@ -213,7 +212,7 @@ record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
         if (methods.isEmpty() && (targetCtor.getModifiers() & Modifier.PUBLIC) != 0 && (clazz.getModifiers() & Modifier.ABSTRACT) == 0) {
             try {
                 var ctorHandle = MethodHandles.publicLookup().unreflectConstructor(targetCtor);
-                return new InjectedImplementation(ctorHandle, injectedTypes);
+                return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes);
             } catch (IllegalAccessException e) {
                 throw new RuntimeException(e);
             }
@@ -297,7 +296,7 @@ record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
         try {
             var implementationLookup = ATTACHMENT_TARGET.defineHiddenClass(bytes, false);
             var ctorHandle = implementationLookup.findConstructor(implementationLookup.lookupClass(), ctorType);
-            return new InjectedImplementation(ctorHandle, injectedTypes);
+            return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes);
         } catch (IllegalAccessException | NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
