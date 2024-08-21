@@ -1,0 +1,105 @@
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev'
+}
+
+group = 'dev.lukebemish'
+// TODO: managed versioning
+version = '0.1.0'
+
+neoForge {
+    version = "21.1.22"
+    addModdingDependenciesTo sourceSets.test
+    
+    mods {
+        testproject {
+            sourceSet sourceSets.test
+        }
+    }
+
+    runs {
+        client {
+            sourceSet = sourceSets.test
+            taskBefore tasks.named('jar')
+            taskBefore tasks.named('prepareClientRun')
+            client()
+        }
+        server {
+            sourceSet = sourceSets.test
+            taskBefore tasks.named('jar')
+            taskBefore tasks.named('prepareServerRun')
+            server()
+        }
+    }
+}
+
+tasks.named('prepareClientRun') {
+    final old = dependsOn.flatten().findAll {
+        it.name != 'prepareClientRun'
+    }
+    dependsOn.clear()
+    dependsOn.addAll(old)
+}
+
+tasks.named('prepareServerRun') {
+    final old = dependsOn.flatten().findAll {
+        it.name != 'prepareServerRun'
+    }
+    dependsOn.clear()
+    dependsOn.addAll(old)
+}
+
+sourceSets {
+    attachment {}
+}
+
+java {
+    withSourcesJar()
+    withJavadocJar()
+    toolchain.languageVersion.set JavaLanguageVersion.of(21)
+    registerFeature('attachment') {
+        usingSourceSet(sourceSets.attachment)
+        disablePublication()
+    }
+}
+
+jar {
+    manifest {
+        attributes (
+                'FMLModType': 'LIBRARY',
+                'Implementation-Version': project.version
+        )
+    }
+}
+
+tasks.named('attachmentJar', Jar) {
+    manifest {
+        attributes (
+                'FMLModType': 'GAMELIBRARY',
+                'Implementation-Version': project.version
+        )
+    }
+}
+
+tasks.named('neoForgeIdeSync') {
+    final old = dependsOn.flatten().findAll {
+        !it.name.startsWith('prepare')
+    }
+    dependsOn.clear()
+    dependsOn.addAll(old)
+}
+
+dependencies {
+    compileOnly cLibs.bundles.compileonly
+    annotationProcessor cLibs.bundles.annotationprocessor
+
+    attachmentCompileOnly cLibs.bundles.compileonly
+    attachmentAnnotationProcessor cLibs.bundles.annotationprocessor
+    jarJar(project(':')) {
+        capabilities {
+            requireCapability 'dev.lukebemish:syringe-attachment'
+        }
+    }
+    
+    testImplementation project(':')
+}
