@@ -10,7 +10,7 @@ version = '0.1.0'
 neoForge {
     version = "21.1.22"
     addModdingDependenciesTo sourceSets.test
-    
+
     mods {
         testproject {
             sourceSet sourceSets.test
@@ -100,6 +100,8 @@ dependencies {
             requireCapability 'dev.lukebemish:syringe-attachment'
         }
     }
-    
+
+    testCompileOnly cLibs.bundles.compileonly
+    testAnnotationProcessor cLibs.bundles.annotationprocessor
     testImplementation project(':')
 }

@@ -2,14 +2,13 @@ package dev.lukebemish.syringe;
 
 import org.jspecify.annotations.Nullable;
 
-import java.lang.reflect.Type;
 import java.util.Objects;
 
 final class DelayedProvider<T> implements Provider<T> {
     private volatile @Nullable T value;
-    private final Type type;
+    private final EvaluatedType type;
 
-    DelayedProvider(Type type) {
+    DelayedProvider(EvaluatedType type) {
         this.type = type;
     }
 

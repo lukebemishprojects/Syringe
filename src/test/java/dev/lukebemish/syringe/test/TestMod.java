@@ -12,8 +12,6 @@ import java.util.Objects;
 
 @Mod("syringe_testmod")
 public abstract class TestMod {
-    private final ObjectFactory objectFactory;
-
     @Inject
     protected abstract IEventBus getEventBus();
 
@@ -23,11 +21,11 @@ public abstract class TestMod {
         Objects.requireNonNull(getEventBus());
         Objects.requireNonNull(objectFactory);
 
-        var options = ObjectFactory.Options.create();
-        options.bindService(ScopedService.class, new ScopedService());
-        this.objectFactory = objectFactory.newObjectFactory(options);
+        var options = ObjectFactory.Configuration.create();
+        options.bindService(ScopedService.class, ScopedService.class, "scopedService");
+        var scopedObjectFactory = objectFactory.newObjectFactory(options);
 
-        var innerThingy = this.objectFactory.newInstance(InnerThingy.class, "innerThingy");
+        var innerThingy = scopedObjectFactory.newInstance(InnerThingy.class, "innerThingy");
         Objects.requireNonNull(innerThingy);
         if (!innerThingy.name.equals("innerThingy")) {
             throw new IllegalStateException("InnerThingy name is not 'innerThingy'");
@@ -38,7 +36,15 @@ public abstract class TestMod {
         System.out.println("Syringe test mod successfully loaded");
     }
 
-    public static class ScopedService {}
+    public abstract static class ScopedService {
+        @Inject
+        protected abstract ObjectFactory getObjectFactory();
+
+        @Inject
+        public ScopedService(String name) {
+            System.out.println("Made scoped service with name: " + name);
+        }
+    }
 
     public abstract static class InnerThingy {
         private final String name;

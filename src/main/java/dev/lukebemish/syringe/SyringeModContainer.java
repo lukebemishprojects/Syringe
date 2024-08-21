@@ -14,12 +14,10 @@ import net.neoforged.neoforgespi.language.IModInfo;
 import net.neoforged.neoforgespi.language.ModFileScanData;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Consumer;
 
 class SyringeModContainer extends ModContainer {
     private static final Logger LOGGER = LogManager.getLogger();
@@ -27,7 +25,8 @@ class SyringeModContainer extends ModContainer {
     private final ModFileScanData scanResults;
     private final IEventBus eventBus;
     private final Module module;
-    private final ObjectFactoryImplementation objectFactory;
+    private final ObjectFactory.Configuration objectFactoryConfiguration;
+    private @Nullable ObjectFactoryImplementation objectFactory;
     private final List<Class<?>> modClasses;
 
     public SyringeModContainer(IModInfo info, List<String> entrypoints, ModFileScanData scanResults, ModuleLayer gameLayer) {
@@ -42,15 +41,20 @@ class SyringeModContainer extends ModContainer {
                 .build()
         );
         this.module = gameLayer.findModule(info.getOwningFile().moduleName()).orElseThrow();
-        this.objectFactory = new ObjectFactoryImplementation(module.getClassLoader(), InjectedImplementation.ROOT);
-        this.objectFactory.registerServiceInstance(IEventBus.class, this.eventBus);
-        this.objectFactory.registerServiceInstance(ModContainer.class, this);
-        this.objectFactory.registerServiceInstance(Dist.class, FMLLoader.getDist());
+        this.objectFactoryConfiguration = ObjectFactory.Configuration.create();
+        this.objectFactoryConfiguration.bindService(IModInfo.class, info);
+        this.objectFactoryConfiguration.bindService(IEventBus.class, eventBus);
+        this.objectFactoryConfiguration.bindService(ModContainer.class, this);
+        this.objectFactoryConfiguration.bindService(Dist.class, FMLLoader.getDist());
 
         // Load classes
         var context = ModLoadingContext.get();
         try {
             context.setActiveContainer(this);
+
+            for (var discoverer : Bootstrap.PER_MOD) {
+                discoverer.configure(this.objectFactoryConfiguration);
+            }
 
             modClasses = new ArrayList<>();
 
@@ -68,24 +72,24 @@ class SyringeModContainer extends ModContainer {
         }
     }
 
+    private final Object constructionLock = new Object();
+
     @Override
     protected void constructMod() {
-        Map<Class<?>, Object> instances = new HashMap<>();
-        Map<Class<?>, Consumer<Object>> providerConsumers = new HashMap<>();
-        for (var modClass : modClasses) {
-            providerConsumers.put(modClass, objectFactory.registerServiceProviderInstance(modClass));
-        }
-        for (var modClass : modClasses) {
-            try {
-                var instance = objectFactory.newInstance(modClass);
-                instances.put(modClass, instance);
-            } catch (Throwable e) {
-                LOGGER.error("Failed to create mod instance. ModID: {}, class {}", getModId(), modClass.getName(), e);
-                throw new ModLoadingException(ModLoadingIssue.error("fml.modloadingissue.failedtoloadmod").withCause(e).withAffectedMod(modInfo));
+        synchronized (this.constructionLock) {
+            if (this.objectFactory != null) {
+                LOGGER.error("Mod was already constructed. ModID: {}", getModId());
+                throw new IllegalStateException("Mod already constructed");
             }
+            var serviceFactory = Bootstrap.ROOT.newObjectFactory(this.objectFactoryConfiguration);
+            var modConfiguration = ObjectFactory.Configuration.create();
+            for (var modClass : modClasses) {
+                modConfiguration.bindService(modClass);
+            }
+            this.objectFactory = serviceFactory.newObjectFactory(modConfiguration);
         }
         for (var modClass : modClasses) {
-            providerConsumers.get(modClass).accept(instances.get(modClass));
+            var ignored = this.objectFactory.findService(modClass);
         }
 
         // TODO: EBS

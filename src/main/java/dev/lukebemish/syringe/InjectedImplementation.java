@@ -2,10 +2,9 @@ package dev.lukebemish.syringe;
 
 import dev.lukebemish.syringe.annotations.Inject;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.loading.FMLLoader;
-import org.apache.commons.lang3.reflect.TypeUtils;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -14,7 +13,6 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -22,30 +20,10 @@ import java.util.List;
 import java.util.SequencedSet;
 import java.util.function.Function;
 
-record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
-    private static final String ATTACHMENT_MODULE = "dev.lukebemish.syringe.attachment";
-    private static final String ATTACHMENT_TARGET_NAME = "dev.lukebemish.syringe.attachment.AttachmentTarget";
+record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injectedServices, List<Instantiation> injectedInstances, int maxManualParameters) {
+    record Instantiation(EvaluatedType type, Object[] args) {}
 
-    private static final MethodHandles.Lookup ATTACHMENT_TARGET;
-
-    static final ObjectFactoryImplementation BOOTSTRAP;
-    static final ObjectFactoryImplementation ROOT;
-
-    static {
-        var layer = FMLLoader.getGameLayer();
-        try {
-            var targetClass = layer.findLoader(ATTACHMENT_MODULE).loadClass(ATTACHMENT_TARGET_NAME);
-            var lookupMethod = MethodHandles.publicLookup().findStatic(targetClass, "lookup", MethodType.methodType(MethodHandles.Lookup.class));
-            ATTACHMENT_TARGET = (MethodHandles.Lookup) lookupMethod.invoke();
-
-            BOOTSTRAP = new ObjectFactoryImplementation(null, null);
-            ROOT = new ObjectFactoryImplementation(targetClass.getClassLoader(), BOOTSTRAP);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private record InjectedMethod(String name, Class<?> erased, Type specific, boolean isPublic) {}
+    private record InjectedMethod(String name, Class<?> erased, EvaluatedType specific, boolean isPublic) {}
 
     private static List<InjectedMethod> collectInjectedMethods(Class<?> clazz) {
         SequencedSet<InjectedMethod> methods = new LinkedHashSet<>();
@@ -79,7 +57,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
                 if (generic.isPrimitive()) {
                     throw new RuntimeException("Cannot inject primitive types");
                 }
-                var specific = method.getGenericReturnType();
+                var specific = EvaluatedType.of(method.getGenericReturnType());
                 methods.add(new InjectedMethod(name, generic, specific, (modifier & Modifier.PUBLIC) != 0));
             }
         }
@@ -89,8 +67,8 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         var clazz = unimplement(initialClazz);
 
         var writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
-        var name = (ATTACHMENT_TARGET_NAME+"$Wrapped").replace('.', '/');
-        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SYNTHETIC, name, null, org.objectweb.asm.Type.getInternalName(Object.class), null);
+        var name = (Bootstrap.ATTACHMENT_TARGET_NAME+"$Wrapped").replace('.', '/');
+        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SYNTHETIC, name, null, Type.getInternalName(Object.class), null);
         writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, "delegate", clazz.descriptorString(), null, null).visitEnd();
 
         for (var method : collectMethodsToMirror(clazz)) {
@@ -99,7 +77,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
                 method.getName(),
                 MethodType.methodType(method.getReturnType(), method.getParameterTypes()).descriptorString(),
                 null, // does this matter?
-                Arrays.stream(method.getExceptionTypes()).map(org.objectweb.asm.Type::getInternalName).toArray(String[]::new)
+                Arrays.stream(method.getExceptionTypes()).map(Type::getInternalName).toArray(String[]::new)
             );
             // We currently only keep `@SubscribeEvent`
             if (method.isAnnotationPresent(SubscribeEvent.class)) {
@@ -110,13 +88,13 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
             methodImpl.visitFieldInsn(Opcodes.GETFIELD, name, "delegate", clazz.descriptorString());
             int index = 1;
             for (int i = 0; i < method.getParameterCount(); i++) {
-                var type = org.objectweb.asm.Type.getType(method.getParameterTypes()[i]);
+                var type = Type.getType(method.getParameterTypes()[i]);
                 var opcode = type.getOpcode(Opcodes.ILOAD);
                 methodImpl.visitVarInsn(opcode, index);
                 index += type.getSize();
             }
-            methodImpl.visitMethodInsn(Opcodes.INVOKEVIRTUAL, org.objectweb.asm.Type.getInternalName(clazz), method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()).descriptorString(), false);
-            var returnType = org.objectweb.asm.Type.getType(method.getReturnType());
+            methodImpl.visitMethodInsn(Opcodes.INVOKEVIRTUAL, Type.getInternalName(clazz), method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()).descriptorString(), false);
+            var returnType = Type.getType(method.getReturnType());
             methodImpl.visitInsn(returnType.getOpcode(Opcodes.IRETURN));
             methodImpl.visitMaxs(0, 0);
             methodImpl.visitEnd();
@@ -125,7 +103,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         var ctorImpl = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", MethodType.methodType(void.class, clazz).descriptorString(), null, null);
         ctorImpl.visitCode();
         ctorImpl.visitVarInsn(Opcodes.ALOAD, 0);
-        ctorImpl.visitMethodInsn(Opcodes.INVOKESPECIAL, org.objectweb.asm.Type.getInternalName(Object.class), "<init>", "()V", false);
+        ctorImpl.visitMethodInsn(Opcodes.INVOKESPECIAL, Type.getInternalName(Object.class), "<init>", "()V", false);
 
         ctorImpl.visitVarInsn(Opcodes.ALOAD, 0);
         ctorImpl.visitVarInsn(Opcodes.ALOAD, 1);
@@ -137,7 +115,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         writer.visitEnd();
         var bytes = writer.toByteArray();
         try {
-            var implementationLookup = ATTACHMENT_TARGET.defineHiddenClass(bytes, false);
+            var implementationLookup = Bootstrap.ATTACHMENT_TARGET.defineHiddenClass(bytes, false);
             var ctorHandle = implementationLookup.findConstructor(implementationLookup.lookupClass(), MethodType.methodType(void.class, clazz));
             return t -> {
                 try {
@@ -173,7 +151,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
             throw new IllegalArgumentException("Class to instantiate must be public");
         }
 
-        List<Type> injectedTypes = new ArrayList<>();
+        List<EvaluatedType> injectedTypes = new ArrayList<>();
         List<Class<?>> injectedClassTypes = new ArrayList<>();
 
         Constructor<?> targetCtor = null;
@@ -202,7 +180,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         for (var param : targetCtor.getParameters()) {
             var type = param.getParameterizedType();
             var erased = param.getType();
-            injectedTypes.add(type);
+            injectedTypes.add(EvaluatedType.of(type));
             injectedClassTypes.add(erased);
             targetCtorArgs.add(erased);
         }
@@ -212,7 +190,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         if (methods.isEmpty() && (targetCtor.getModifiers() & Modifier.PUBLIC) != 0 && (clazz.getModifiers() & Modifier.ABSTRACT) == 0) {
             try {
                 var ctorHandle = MethodHandles.publicLookup().unreflectConstructor(targetCtor);
-                return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes);
+                return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes, List.of(), targetCtorArgs.size());
             } catch (IllegalAccessException e) {
                 throw new RuntimeException(e);
             }
@@ -223,8 +201,8 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         }
 
         var writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
-        var name = (ATTACHMENT_TARGET_NAME+"$"+clazz.getSimpleName()).replace('.', '/');
-        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SYNTHETIC, name, null, org.objectweb.asm.Type.getInternalName(clazz), null);
+        var name = (Bootstrap.ATTACHMENT_TARGET_NAME+"$"+clazz.getSimpleName()).replace('.', '/');
+        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SYNTHETIC, name, null, Type.getInternalName(clazz), null);
 
         var implementationMethod = writer.visitMethod(
             Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
@@ -234,7 +212,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
             null
         );
         implementationMethod.visitCode();
-        implementationMethod.visitLdcInsn(org.objectweb.asm.Type.getType(clazz));
+        implementationMethod.visitLdcInsn(Type.getType(clazz));
         implementationMethod.visitInsn(Opcodes.ARETURN);
         implementationMethod.visitMaxs(0, 0);
         implementationMethod.visitEnd();
@@ -243,7 +221,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
             var fieldName = "$syringe_injected_field$"+method.name;
             var field = writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, fieldName, Provider.class.descriptorString(), null, null);
             field.visitEnd();
-            injectedTypes.add(TypeUtils.parameterize(Provider.class, method.specific()));
+            injectedTypes.add(new EvaluatedType(Provider.class, List.of(method.specific())));
             injectedClassTypes.add(Provider.class);
             var methodImpl = writer.visitMethod(
                 (method.isPublic()? Opcodes.ACC_PUBLIC : Opcodes.ACC_PROTECTED) | Opcodes.ACC_FINAL,
@@ -255,8 +233,8 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
             methodImpl.visitCode();
             methodImpl.visitVarInsn(Opcodes.ALOAD, 0);
             methodImpl.visitFieldInsn(Opcodes.GETFIELD, name, fieldName, Provider.class.descriptorString());
-            methodImpl.visitMethodInsn(Opcodes.INVOKEINTERFACE, org.objectweb.asm.Type.getInternalName(Provider.class), "get", MethodType.methodType(Object.class).descriptorString(), true);
-            methodImpl.visitTypeInsn(Opcodes.CHECKCAST, org.objectweb.asm.Type.getInternalName(method.erased()));
+            methodImpl.visitMethodInsn(Opcodes.INVOKEINTERFACE, Type.getInternalName(Provider.class), "get", MethodType.methodType(Object.class).descriptorString(), true);
+            methodImpl.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(method.erased()));
             methodImpl.visitInsn(Opcodes.ARETURN);
             methodImpl.visitMaxs(0, 0);
             methodImpl.visitEnd();
@@ -268,7 +246,7 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         ctor.visitCode();
         int index = 1;
         for (var argType : targetCtorArgs) {
-            var type = org.objectweb.asm.Type.getType(argType);
+            var type = Type.getType(argType);
             index += type.getSize();
         }
         for (var method : methods) {
@@ -280,12 +258,12 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
         ctor.visitVarInsn(Opcodes.ALOAD, 0);
         index = 1;
         for (var argType : targetCtorArgs) {
-            var type = org.objectweb.asm.Type.getType(argType);
+            var type = Type.getType(argType);
             var opcode = type.getOpcode(Opcodes.ILOAD);
             ctor.visitVarInsn(opcode, index);
             index += type.getSize();
         }
-        ctor.visitMethodInsn(Opcodes.INVOKESPECIAL, org.objectweb.asm.Type.getInternalName(clazz), "<init>", MethodType.methodType(void.class, targetCtorArgs).descriptorString(), false);
+        ctor.visitMethodInsn(Opcodes.INVOKESPECIAL, Type.getInternalName(clazz), "<init>", MethodType.methodType(void.class, targetCtorArgs).descriptorString(), false);
         ctor.visitInsn(Opcodes.RETURN);
         ctor.visitMaxs(0, 0);
         ctor.visitEnd();
@@ -294,9 +272,9 @@ record InjectedImplementation(FastInvoker constructor, List<Type> injections) {
 
         var bytes = writer.toByteArray();
         try {
-            var implementationLookup = ATTACHMENT_TARGET.defineHiddenClass(bytes, false);
+            var implementationLookup = Bootstrap.ATTACHMENT_TARGET.defineHiddenClass(bytes, false);
             var ctorHandle = implementationLookup.findConstructor(implementationLookup.lookupClass(), ctorType);
-            return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes);
+            return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes, List.of(), targetCtorArgs.size());
         } catch (IllegalAccessException | NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
