@@ -1,20 +1,27 @@
 package dev.lukebemish.syringe;
 
 import dev.lukebemish.syringe.annotations.Inject;
+import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.loading.FMLLoader;
+import org.apache.commons.lang3.reflect.TypeUtils;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.AccessFlag;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.SequencedSet;
+import java.util.function.Function;
 
 record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
     private static final String ATTACHMENT_MODULE = "dev.lukebemish.syringe.attachment";
@@ -39,7 +46,7 @@ record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
         }
     }
 
-    private record InjectedMethod(String name, Class<?> generic, Type specific, boolean isPublic) {}
+    private record InjectedMethod(String name, Class<?> erased, Type specific, boolean isPublic) {}
 
     private static List<InjectedMethod> collectInjectedMethods(Class<?> clazz) {
         SequencedSet<InjectedMethod> methods = new LinkedHashSet<>();
@@ -79,20 +86,96 @@ record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
         }
     }
 
-    static InjectedImplementation implement(Class<?> clazz) {
-        if ((clazz.getModifiers() & Modifier.PUBLIC) == 0) {
-            throw new RuntimeException("Class to instantiate must be public");
+    static <T> Function<T, ?> wrap(Class<T> initialClazz) {
+        var clazz = unimplement(initialClazz);
+
+        var writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+        var name = (ATTACHMENT_TARGET_NAME+"$Wrapped").replace('.', '/');
+        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SYNTHETIC, name, null, org.objectweb.asm.Type.getInternalName(Object.class), null);
+        writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, "delegate", clazz.descriptorString(), null, null).visitEnd();
+
+        for (var method : collectMethodsToMirror(clazz)) {
+            var methodImpl = writer.visitMethod(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL,
+                method.getName(),
+                MethodType.methodType(method.getReturnType(), method.getParameterTypes()).descriptorString(),
+                null, // does this matter?
+                Arrays.stream(method.getExceptionTypes()).map(org.objectweb.asm.Type::getInternalName).toArray(String[]::new)
+            );
+            // We currently only keep `@SubscribeEvent`
+            if (method.isAnnotationPresent(SubscribeEvent.class)) {
+                methodImpl.visitAnnotation(SubscribeEvent.class.descriptorString(), true).visitEnd();
+            }
+            methodImpl.visitCode();
+            methodImpl.visitVarInsn(Opcodes.ALOAD, 0);
+            methodImpl.visitFieldInsn(Opcodes.GETFIELD, name, "delegate", clazz.descriptorString());
+            int index = 1;
+            for (int i = 0; i < method.getParameterCount(); i++) {
+                var type = org.objectweb.asm.Type.getType(method.getParameterTypes()[i]);
+                var opcode = type.getOpcode(Opcodes.ILOAD);
+                methodImpl.visitVarInsn(opcode, index);
+                index += type.getSize();
+            }
+            methodImpl.visitMethodInsn(Opcodes.INVOKEVIRTUAL, org.objectweb.asm.Type.getInternalName(clazz), method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()).descriptorString(), false);
+            var returnType = org.objectweb.asm.Type.getType(method.getReturnType());
+            methodImpl.visitInsn(returnType.getOpcode(Opcodes.IRETURN));
+            methodImpl.visitMaxs(0, 0);
+            methodImpl.visitEnd();
         }
-        if ((clazz.getModifiers() & Modifier.FINAL) != 0) {
-            throw new RuntimeException("Class to instantiate may not be final");
+
+        var ctorImpl = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", MethodType.methodType(void.class, clazz).descriptorString(), null, null);
+        ctorImpl.visitCode();
+        ctorImpl.visitVarInsn(Opcodes.ALOAD, 0);
+        ctorImpl.visitMethodInsn(Opcodes.INVOKESPECIAL, org.objectweb.asm.Type.getInternalName(Object.class), "<init>", "()V", false);
+
+        ctorImpl.visitVarInsn(Opcodes.ALOAD, 0);
+        ctorImpl.visitVarInsn(Opcodes.ALOAD, 1);
+        ctorImpl.visitFieldInsn(Opcodes.PUTFIELD, name, "delegate", clazz.descriptorString());
+        ctorImpl.visitInsn(Opcodes.RETURN);
+        ctorImpl.visitMaxs(0, 0);
+        ctorImpl.visitEnd();
+
+        writer.visitEnd();
+        var bytes = writer.toByteArray();
+        try {
+            var implementationLookup = ATTACHMENT_TARGET.defineHiddenClass(bytes, false);
+            var ctorHandle = implementationLookup.findConstructor(implementationLookup.lookupClass(), MethodType.methodType(void.class, clazz));
+            return t -> {
+                try {
+                    return ctorHandle.invoke((T) t);
+                } catch (Throwable e) {
+                    throw new RuntimeException(e);
+                }
+            };
+        } catch (IllegalAccessException | NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static Class<?> unimplement(Class<?> clazz) {
+        if (!clazz.isHidden()) {
+            return clazz;
+        }
+        try {
+            var method = clazz.getMethod("$syringe_original_type");
+            return (Class<?>) method.invoke(null);
+        } catch (NoSuchMethodException e) {
+            return clazz;
+        } catch (InvocationTargetException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    static InjectedImplementation implement(Class<?> clazz) {
+        if (clazz.isHidden()) {
+            throw new IllegalArgumentException("Class to instantiate must not be hidden");
+        }
+        if ((clazz.getModifiers() & Modifier.PUBLIC) == 0) {
+            throw new IllegalArgumentException("Class to instantiate must be public");
         }
 
         List<Type> injectedTypes = new ArrayList<>();
         List<Class<?>> injectedClassTypes = new ArrayList<>();
-
-        var writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
-        var name = (ATTACHMENT_TARGET_NAME+"$"+clazz.getSimpleName()).replace('.', '/');
-        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SYNTHETIC, name, null, org.objectweb.asm.Type.getInternalName(clazz), null);
 
         Constructor<?> targetCtor = null;
         Constructor<?> noArgCtor = null;
@@ -126,22 +209,55 @@ record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
         }
 
         var methods = collectInjectedMethods(clazz);
+
+        if (methods.isEmpty() && (targetCtor.getModifiers() & Modifier.PUBLIC) != 0 && (clazz.getModifiers() & Modifier.ABSTRACT) == 0) {
+            try {
+                var ctorHandle = MethodHandles.publicLookup().unreflectConstructor(targetCtor);
+                return new InjectedImplementation(ctorHandle, injectedTypes);
+            } catch (IllegalAccessException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        if ((clazz.getModifiers() & Modifier.FINAL) != 0) {
+            throw new RuntimeException("Class to instantiate with a protected constructor or abstract methods may not be final");
+        }
+
+        var writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+        var name = (ATTACHMENT_TARGET_NAME+"$"+clazz.getSimpleName()).replace('.', '/');
+        writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SYNTHETIC, name, null, org.objectweb.asm.Type.getInternalName(clazz), null);
+
+        var implementationMethod = writer.visitMethod(
+            Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+            "$syringe_original_type",
+            MethodType.methodType(Class.class).descriptorString(),
+            null,
+            null
+        );
+        implementationMethod.visitCode();
+        implementationMethod.visitLdcInsn(org.objectweb.asm.Type.getType(clazz));
+        implementationMethod.visitInsn(Opcodes.ARETURN);
+        implementationMethod.visitMaxs(0, 0);
+        implementationMethod.visitEnd();
+
         for (var method : methods) {
-            var fieldName = "$"+method.name+"$syringe_injected_field";
-            var field = writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, fieldName, method.generic().descriptorString(), null, null);
+            var fieldName = "$syringe_injected_field$"+method.name;
+            var field = writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, fieldName, Provider.class.descriptorString(), null, null);
             field.visitEnd();
-            injectedTypes.add(method.specific());
-            injectedClassTypes.add(method.generic());
+            injectedTypes.add(TypeUtils.parameterize(Provider.class, method.specific()));
+            injectedClassTypes.add(Provider.class);
             var methodImpl = writer.visitMethod(
-                    (method.isPublic()? Opcodes.ACC_PUBLIC : Opcodes.ACC_PROTECTED) | Opcodes.ACC_FINAL,
-                    method.name,
-                    MethodType.methodType(method.generic()).descriptorString(),
-                    null,
-                    null
+                (method.isPublic()? Opcodes.ACC_PUBLIC : Opcodes.ACC_PROTECTED) | Opcodes.ACC_FINAL,
+                method.name,
+                MethodType.methodType(method.erased()).descriptorString(),
+                null,
+                null
             );
             methodImpl.visitCode();
             methodImpl.visitVarInsn(Opcodes.ALOAD, 0);
-            methodImpl.visitFieldInsn(Opcodes.GETFIELD, name, fieldName, method.generic().descriptorString());
+            methodImpl.visitFieldInsn(Opcodes.GETFIELD, name, fieldName, Provider.class.descriptorString());
+            methodImpl.visitMethodInsn(Opcodes.INVOKEINTERFACE, org.objectweb.asm.Type.getInternalName(Provider.class), "get", MethodType.methodType(Object.class).descriptorString(), true);
+            methodImpl.visitTypeInsn(Opcodes.CHECKCAST, org.objectweb.asm.Type.getInternalName(method.erased()));
             methodImpl.visitInsn(Opcodes.ARETURN);
             methodImpl.visitMaxs(0, 0);
             methodImpl.visitEnd();
@@ -159,7 +275,7 @@ record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
         for (var method : methods) {
             ctor.visitVarInsn(Opcodes.ALOAD, 0);
             ctor.visitVarInsn(Opcodes.ALOAD, index);
-            ctor.visitFieldInsn(Opcodes.PUTFIELD, name, "$"+method.name+"$syringe_injected_field", method.generic().descriptorString());
+            ctor.visitFieldInsn(Opcodes.PUTFIELD, name, "$syringe_injected_field$"+method.name, Provider.class.descriptorString());
             index++;
         }
         ctor.visitVarInsn(Opcodes.ALOAD, 0);
@@ -185,5 +301,16 @@ record InjectedImplementation(MethodHandle constructor, List<Type> injections) {
         } catch (IllegalAccessException | NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static List<Method> collectMethodsToMirror(Class<?> clazz) {
+        List<Method> methods = new ArrayList<>();
+        for (var method : clazz.getMethods()) {
+            // We only mirror public `@SubscribeEvent` methods
+            if (!method.accessFlags().contains(AccessFlag.STATIC) && method.isAnnotationPresent(SubscribeEvent.class)) {
+                methods.add(method);
+            }
+        }
+        return methods;
     }
 }

@@ -1,7 +1,6 @@
 package dev.lukebemish.syringe;
 
 import com.google.auto.service.AutoService;
-import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.ModLoadingException;
 import net.neoforged.fml.common.Mod;
@@ -10,7 +9,6 @@ import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.neoforgespi.language.IModInfo;
 import net.neoforged.neoforgespi.language.IModLanguageLoader;
 import net.neoforged.neoforgespi.language.ModFileScanData;
-import org.jetbrains.annotations.Nullable;
 
 import java.lang.annotation.ElementType;
 import java.util.Comparator;

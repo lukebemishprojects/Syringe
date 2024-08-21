@@ -1,13 +1,16 @@
 package dev.lukebemish.syringe;
 
+import org.apache.commons.lang3.reflect.TypeUtils;
 import org.jspecify.annotations.Nullable;
 
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 class ObjectFactoryImplementation implements ObjectFactory {
     private static final Map<Class<?>, InjectedImplementation> creators = new ConcurrentHashMap<>();
@@ -15,25 +18,74 @@ class ObjectFactoryImplementation implements ObjectFactory {
     private final @Nullable ClassLoader classLoader;
     private final @Nullable ObjectFactoryImplementation parent;
 
-    private final Map<Type, Object> instances = new HashMap<>();
+    private final Map<Type, Object> services = new HashMap<>();
+    private final Map<Type, Provider<?>> serviceProviders = new HashMap<>();
 
-    ObjectFactoryImplementation(ClassLoader classLoader, @Nullable ObjectFactoryImplementation parent) {
+    ObjectFactoryImplementation(@Nullable ClassLoader classLoader, @Nullable ObjectFactoryImplementation parent) {
         this.classLoader = classLoader;
         this.parent = parent;
-        instances.put(ObjectFactory.class, this);
+        services.put(ObjectFactory.class, this);
     }
 
-    void registerInstance(Type type, Object instance) {
-        instances.put(type, instance);
+    void registerServiceInstance(Type type, Object instance) {
+        services.put(type, instance);
     }
 
-    private Object ofType(Type type) {
-        var instance = instances.get(type);
+    Consumer<Object> registerServiceProviderInstance(Type type) {
+        var provider = new DelayedProvider<>(type);
+        services.put(TypeUtils.parameterize(Provider.class, type), provider);
+        serviceProviders.put(type, provider);
+        return provider::set;
+    }
+
+    private @Nullable Object serviceInstance(Type type) {
+        var instance = services.get(type);
         if (instance != null) {
             return instance;
         }
         if (parent != null) {
-            return parent.ofType(type);
+            return parent.serviceInstance(type);
+        }
+        return null;
+    }
+
+    private @Nullable Object serviceViaProvider(Type type) {
+        var provider = serviceProviders.get(type);
+        if (provider != null) {
+            return provider.get();
+        }
+        if (parent != null) {
+            return parent.serviceViaProvider(type);
+        }
+        return null;
+    }
+
+    private @Nullable Object findServiceOfType(Type type) {
+        var instance = serviceInstance(type);
+        if (instance != null) {
+            return instance;
+        }
+        var provider = serviceViaProvider(type);
+        if (provider != null) {
+            return provider;
+        }
+        if (type instanceof ParameterizedType parameterizedType) {
+            var rawType = parameterizedType.getRawType();
+            if (rawType.equals(Provider.class)) {
+                var providedType = parameterizedType.getActualTypeArguments()[0];
+                var actual = findServiceOfType(providedType);
+                if (actual != null) {
+                    return new ConstantProvider<>(actual);
+                }
+            }
+        }
+        return null;
+    }
+
+    private Object getServiceOfType(Type type) {
+        var instance = findServiceOfType(type);
+        if (instance != null) {
+            return instance;
         }
         throw new RuntimeException("Cannot inject type " + type);
     }
@@ -55,7 +107,7 @@ class ObjectFactoryImplementation implements ObjectFactory {
             i++;
         }
         while (i < targetParams.length) {
-            args.add(ofType(creator.injections().get(i)));
+            args.add(getServiceOfType(creator.injections().get(i)));
             i++;
         }
         try {
@@ -63,5 +115,16 @@ class ObjectFactoryImplementation implements ObjectFactory {
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public ObjectFactory newObjectFactory(Options options) {
+        var factory = new ObjectFactoryImplementation(this.classLoader, this);
+        factory.serviceProviders.putAll(options.providers);
+        for (var serviceProvider : options.providers.entrySet()) {
+            factory.services.put(TypeUtils.parameterize(Provider.class, serviceProvider.getKey()), serviceProvider.getValue());
+        }
+        factory.services.putAll(options.instances);
+        return factory;
     }
 }

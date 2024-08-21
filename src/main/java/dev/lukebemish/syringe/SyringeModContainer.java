@@ -19,10 +19,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 class SyringeModContainer extends ModContainer {
     private static final Logger LOGGER = LogManager.getLogger();
-    
+
     private final ModFileScanData scanResults;
     private final IEventBus eventBus;
     private final Module module;
@@ -32,18 +33,19 @@ class SyringeModContainer extends ModContainer {
     public SyringeModContainer(IModInfo info, List<String> entrypoints, ModFileScanData scanResults, ModuleLayer gameLayer) {
         super(info);
         this.scanResults = scanResults;
-        this.eventBus = BusBuilder.builder()
-                .setExceptionHandler((bus, event, listeners, index, throwable) -> {
-                    LOGGER.error(new EventBusErrorMessage(event, index, listeners, throwable));
-                })
+        this.eventBus = new SuperclassAllowingEventBus(BusBuilder.builder()
+                .setExceptionHandler((bus, event, listeners, index, throwable) ->
+                    LOGGER.error(new EventBusErrorMessage(event, index, listeners, throwable))
+                )
                 .markerType(IModBusEvent.class)
                 .allowPerPhasePost()
-                .build();
+                .build()
+        );
         this.module = gameLayer.findModule(info.getOwningFile().moduleName()).orElseThrow();
         this.objectFactory = new ObjectFactoryImplementation(module.getClassLoader(), InjectedImplementation.ROOT);
-        this.objectFactory.registerInstance(IEventBus.class, this.eventBus);
-        this.objectFactory.registerInstance(ModContainer.class, this);
-        this.objectFactory.registerInstance(Dist.class, FMLLoader.getDist());
+        this.objectFactory.registerServiceInstance(IEventBus.class, this.eventBus);
+        this.objectFactory.registerServiceInstance(ModContainer.class, this);
+        this.objectFactory.registerServiceInstance(Dist.class, FMLLoader.getDist());
 
         // Load classes
         var context = ModLoadingContext.get();
@@ -69,6 +71,10 @@ class SyringeModContainer extends ModContainer {
     @Override
     protected void constructMod() {
         Map<Class<?>, Object> instances = new HashMap<>();
+        Map<Class<?>, Consumer<Object>> providerConsumers = new HashMap<>();
+        for (var modClass : modClasses) {
+            providerConsumers.put(modClass, objectFactory.registerServiceProviderInstance(modClass));
+        }
         for (var modClass : modClasses) {
             try {
                 var instance = objectFactory.newInstance(modClass);
@@ -78,8 +84,10 @@ class SyringeModContainer extends ModContainer {
                 throw new ModLoadingException(ModLoadingIssue.error("fml.modloadingissue.failedtoloadmod").withCause(e).withAffectedMod(modInfo));
             }
         }
-        instances.forEach(objectFactory::registerInstance);
-        
+        for (var modClass : modClasses) {
+            providerConsumers.get(modClass).accept(instances.get(modClass));
+        }
+
         // TODO: EBS
     }
 
