@@ -212,10 +212,10 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
 
     static InjectedImplementation implement(Class<?> clazz) {
         if (clazz.isHidden()) {
-            throw new IllegalArgumentException("Class to instantiate must not be hidden");
+            throw new IllegalArgumentException("Class to instantiate must not be hidden: "+clazz);
         }
         if ((clazz.getModifiers() & Modifier.PUBLIC) == 0) {
-            throw new IllegalArgumentException("Class to instantiate must be public");
+            throw new IllegalArgumentException("Class to instantiate must be public: "+clazz);
         }
 
         List<EvaluatedType> injectedTypes = new ArrayList<>();
@@ -232,14 +232,14 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
                 noArgCtor = ctor;
             } else if (ctor.isAnnotationPresent(Inject.class)) {
                 if (targetCtor != null) {
-                    throw new RuntimeException("Class to instantiate must have at most one constructor annotated with @Inject");
+                    throw new RuntimeException("Class to instantiate must have at most one constructor annotated with @Inject: "+clazz);
                 }
                 targetCtor = ctor;
             }
         }
         if (targetCtor == null) {
             if (noArgCtor == null) {
-                throw new RuntimeException("Class to instantiate must have a no-arg constructor or a constructor annotated with @Inject");
+                throw new RuntimeException("Class to instantiate must have a no-arg constructor or a constructor annotated with @Inject: "+clazz);
             }
             targetCtor = noArgCtor;
         }
@@ -267,7 +267,7 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
         }
 
         if ((clazz.getModifiers() & Modifier.FINAL) != 0) {
-            throw new RuntimeException("Class to instantiate with a protected constructor or abstract methods may not be final");
+            throw new RuntimeException("Class to instantiate with a protected constructor or abstract methods may not be final: "+clazz);
         }
 
         var writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);

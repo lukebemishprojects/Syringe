@@ -7,9 +7,15 @@ group = 'dev.lukebemish'
 // TODO: managed versioning
 version = '0.1.0'
 
+sourceSets {
+    attachment {}
+    discoverers {}
+}
+
 neoForge {
     version = "21.1.22"
     addModdingDependenciesTo sourceSets.test
+    addModdingDependenciesTo sourceSets.discoverers
 
     mods {
         testproject {
@@ -49,16 +55,16 @@ tasks.named('prepareServerRun') {
     dependsOn.addAll(old)
 }
 
-sourceSets {
-    attachment {}
-}
-
 java {
     withSourcesJar()
     withJavadocJar()
     toolchain.languageVersion.set JavaLanguageVersion.of(21)
     registerFeature('attachment') {
         usingSourceSet(sourceSets.attachment)
+        disablePublication()
+    }
+    registerFeature('discoverers') {
+        usingSourceSet(sourceSets.discoverers)
         disablePublication()
     }
 }
@@ -75,8 +81,17 @@ jar {
 tasks.named('attachmentJar', Jar) {
     manifest {
         attributes (
-                'FMLModType': 'GAMELIBRARY',
-                'Implementation-Version': project.version
+            'FMLModType': 'GAMELIBRARY',
+            'Implementation-Version': project.version
+        )
+    }
+}
+
+tasks.named('discoverersJar', Jar) {
+    manifest {
+        attributes (
+            'FMLModType': 'GAMELIBRARY',
+            'Implementation-Version': project.version
         )
     }
 }
@@ -98,6 +113,14 @@ dependencies {
     jarJar(project(':')) {
         capabilities {
             requireCapability 'dev.lukebemish:syringe-attachment'
+        }
+    }
+    discoverersApi project(':')
+    discoverersCompileOnly cLibs.bundles.compileonly
+    discoverersAnnotationProcessor cLibs.bundles.annotationprocessor
+    jarJar(project(':')) {
+        capabilities {
+            requireCapability 'dev.lukebemish:syringe-discoverers'
         }
     }
 
