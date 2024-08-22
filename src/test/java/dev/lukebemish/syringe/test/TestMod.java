@@ -2,11 +2,14 @@ package dev.lukebemish.syringe.test;
 
 import dev.lukebemish.syringe.ObjectFactory;
 import dev.lukebemish.syringe.annotations.Inject;
+import dev.lukebemish.syringe.annotations.Label;
+import net.minecraft.world.item.Item;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.Objects;
 
@@ -14,6 +17,9 @@ import java.util.Objects;
 public abstract class TestMod {
     @Inject
     protected abstract IEventBus getEventBus();
+
+    @Label("minecraft:item")
+    protected abstract DeferredRegister<Item> getItemRegister();
 
     @Inject
     public TestMod(ModContainer modContainer, ObjectFactory objectFactory) {
@@ -32,6 +38,8 @@ public abstract class TestMod {
         }
 
         getEventBus().register(innerThingy);
+
+        getItemRegister().register("testitem", () -> new Item(new Item.Properties()));
 
         System.out.println("Syringe test mod successfully loaded");
     }

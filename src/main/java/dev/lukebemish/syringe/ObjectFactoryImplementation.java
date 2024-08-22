@@ -71,14 +71,6 @@ class ObjectFactoryImplementation implements ObjectFactory {
         return parent != null ? parent.tryInstantiate(evaluatedType, args) : null;
     }
 
-    private Object instantiate(EvaluatedType evaluatedType, Object[] args) {
-        var instance = tryInstantiate(evaluatedType, args);
-        if (instance != null) {
-            return instance;
-        }
-        throw new RuntimeException("Cannot instantiate type " + evaluatedType);
-    }
-
     @SuppressWarnings("unchecked")
     @Override
     public <T> T findService(Class<T> clazz) {
@@ -87,7 +79,14 @@ class ObjectFactoryImplementation implements ObjectFactory {
 
     @Override
     public Object newInstance(EvaluatedType type, Object... args) {
-        return instantiate(type, args);
+        var instance = tryInstantiate(type, args);
+        if (instance != null) {
+            return instance;
+        }
+        if (type.typeParameters().isEmpty()) {
+            return makeNewInstance(type.rawType(), args);
+        }
+        throw new RuntimeException("Cannot instantiate type " + type);
     }
 
     @Override
@@ -97,6 +96,10 @@ class ObjectFactoryImplementation implements ObjectFactory {
             return clazz.cast(withInstantiator);
         }
 
+        return makeNewInstance(clazz, argumentValues);
+    }
+
+    private  <T> T makeNewInstance(Class<T> clazz, Object[] argumentValues) {
         var creator = creators.computeIfAbsent(clazz, InjectedImplementation::implement);
         var targetParams = creator.constructor().handle().type().parameterArray();
         Object[] args = new Object[targetParams.length];
@@ -118,7 +121,7 @@ class ObjectFactoryImplementation implements ObjectFactory {
             i++;
         }
         for (InjectedImplementation.Instantiation instantiation : creator.injectedInstances()) {
-            var instance = instantiate(new EvaluatedType(Provider.class, List.of(instantiation.type())), instantiation.args());
+            var instance = newInstance(instantiation.type(), instantiation.args());
             args[i] = instance;
             i++;
         }
@@ -141,12 +144,24 @@ class ObjectFactoryImplementation implements ObjectFactory {
         var servicesToCreate = new HashMap<>(factory.servicesToPropogate);
         servicesToCreate.putAll(configuration.toCreateServices);
 
+        var toCreateServices = new HashMap<EvaluatedType, DelayedProvider<?>>();
+        for (var entry : servicesToCreate.entrySet()) {
+            var provider = new DelayedProvider<>(entry.getKey());
+            toCreateServices.put(entry.getKey(), provider);
+        }
+        factory.serviceProviders.putAll(toCreateServices);
+        for (var entry : toCreateServices.entrySet()) {
+            var toCreate = servicesToCreate.get(entry.getKey());
+            var instance = factory.newInstance(toCreate.implementation(), toCreate.args());
+            ((DelayedProvider) entry.getValue()).set(instance);
+        }
+
+        // Instantiators after services
         factory.instantiatorsToPropogate.putAll(this.instantiatorsToPropogate);
         factory.instantiatorsToPropogate.putAll(configuration.toCreateInstantiatorTypes);
 
         var instantiatorsToCreate = new HashMap<>(factory.instantiatorsToPropogate);
         instantiatorsToCreate.putAll(configuration.toCreateInstantiators);
-
         for (var entry : configuration.instantiators.entrySet()) {
             var provider = new ConstantProvider<Instantiator<?>>(entry.getValue());
             factory.instantiators.put(entry.getKey(), provider);
@@ -156,23 +171,14 @@ class ObjectFactoryImplementation implements ObjectFactory {
             var provider = new DelayedProvider<Instantiator<?>>(new EvaluatedType(Instantiator.class, List.of(EvaluatedType.of(entry.getKey()))));
             toCreateInstantiators.put(entry.getKey(), provider);
         }
-        factory.instantiators.putAll(toCreateInstantiators);
-        var toCreateServices = new HashMap<EvaluatedType, DelayedProvider<?>>();
-        for (var entry : servicesToCreate.entrySet()) {
-            var provider = new DelayedProvider<>(entry.getKey());
-            toCreateServices.put(entry.getKey(), provider);
-        }
-        factory.serviceProviders.putAll(toCreateServices);
         for (var entry : toCreateInstantiators.entrySet()) {
             var toCreate = instantiatorsToCreate.get(entry.getKey());
             var instance = factory.newInstance(toCreate.implementation(), toCreate.args());
             entry.getValue().set(instance);
         }
-        for (var entry : toCreateServices.entrySet()) {
-            var toCreate = servicesToCreate.get(entry.getKey());
-            var instance = factory.newInstance(toCreate.implementation(), toCreate.args());
-            ((DelayedProvider) entry.getValue()).set(instance);
-        }
+        // Unlike services, we do not make these available until afterward -- services must use instantiators from the parent factory
+        factory.instantiators.putAll(toCreateInstantiators);
+
         return factory;
     }
 }

@@ -1,6 +1,7 @@
 package dev.lukebemish.syringe;
 
 import dev.lukebemish.syringe.annotations.Inject;
+import dev.lukebemish.syringe.annotations.Label;
 import net.neoforged.bus.api.SubscribeEvent;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
@@ -15,52 +16,118 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.SequencedSet;
+import java.util.SequencedMap;
 import java.util.function.Function;
 
 record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injectedServices, List<Instantiation> injectedInstances, int maxManualParameters) {
     record Instantiation(EvaluatedType type, Object[] args) {}
 
     private record InjectedMethod(String name, Class<?> erased, EvaluatedType specific, boolean isPublic) {}
+    private record ImplementedMethod(String name, Class<?> erased, EvaluatedType specific, boolean isPublic, Object[] args) {}
 
-    private static List<InjectedMethod> collectInjectedMethods(Class<?> clazz) {
-        SequencedSet<InjectedMethod> methods = new LinkedHashSet<>();
-        collectInjectedMethods(clazz, clazz, methods);
-        return new ArrayList<>(methods);
-    }
-
-    private static void collectInjectedMethods(Class<?> root, Class<?> actual, SequencedSet<InjectedMethod> methods) {
+    public static void collectMethods(Class<?> actual, SequencedMap<String, Method> methods) {
+        for (var method : actual.getDeclaredMethods()) {
+            if (method.accessFlags().contains(AccessFlag.PRIVATE)) {
+                continue;
+            }
+            var nameAndDescriptor = method.getName()+MethodType.methodType(method.getReturnType(), method.getParameterTypes()).descriptorString();
+            if (methods.containsKey(nameAndDescriptor)) {
+                var existing = methods.get(nameAndDescriptor);
+                if (!method.accessFlags().contains(AccessFlag.ABSTRACT) && existing.accessFlags().contains(AccessFlag.ABSTRACT)) {
+                    methods.put(nameAndDescriptor, method);
+                } else {
+                    continue;
+                }
+            }
+            methods.put(nameAndDescriptor, method);
+        }
         var superClazz = actual.getSuperclass();
         if (superClazz != null && (superClazz.getModifiers() & Modifier.ABSTRACT) != 0) {
-            collectInjectedMethods(root, superClazz, methods);
+            collectMethods(superClazz, methods);
         }
         for (var interfaceClazz : actual.getInterfaces()) {
-            collectInjectedMethods(root, interfaceClazz, methods);
+            collectMethods(interfaceClazz, methods);
         }
+    }
 
-        for (var method : actual.getDeclaredMethods()) {
+    private static void collectInjectedMethods(Class<?> actual, SequencedMap<String, InjectedMethod> methods, SequencedMap<String, ImplementedMethod> implementedMethods) {
+        var methodMap = new LinkedHashMap<String, Method>();
+        collectMethods(actual, methodMap);
+        for (var method : methodMap.values()) {
             if (method.isAnnotationPresent(Inject.class)) {
                 var modifier = method.getModifiers();
                 if ((modifier & Modifier.FINAL) != 0) {
-                    throw new RuntimeException("Injected getter must not be final");
+                    throw new RuntimeException("Injected getter must not be final: "+formatMethod(method));
                 }
                 if ((modifier & Modifier.PROTECTED) == 0 && (modifier & Modifier.PUBLIC) == 0) {
-                    throw new RuntimeException("Injected getter must be protected or public");
+                    throw new RuntimeException("Injected getter must be protected or public: "+formatMethod(method));
                 }
                 if (method.getParameterTypes().length != 0) {
-                    throw new RuntimeException("Injected getter must not have parameters");
+                    throw new RuntimeException("Injected getter must not have parameters: "+formatMethod(method));
                 }
                 var name = method.getName();
                 var generic = method.getReturnType();
                 if (generic.isPrimitive()) {
-                    throw new RuntimeException("Cannot inject primitive types");
+                    throw new RuntimeException("Cannot inject primitive types: "+formatMethod(method));
                 }
                 var specific = EvaluatedType.of(method.getGenericReturnType());
-                methods.add(new InjectedMethod(name, generic, specific, (modifier & Modifier.PUBLIC) != 0));
+                if (methods.containsKey(name)) {
+                    var existing = methods.get(name);
+                    if (!existing.specific().equals(specific)) {
+                        throw new RuntimeException("Duplicate injected getter with differing types: "+formatMethod(method));
+                    }
+                }
+                if (implementedMethods.containsKey(name)) {
+                    var existing = implementedMethods.get(name);
+                    if (!existing.specific().equals(specific)) {
+                        throw new RuntimeException("Duplicate injected getter with differing types: "+formatMethod(method));
+                    }
+                    implementedMethods.remove(name);
+                }
+                methods.put(name, new InjectedMethod(name, generic, specific, (modifier & Modifier.PUBLIC) != 0));
+            } else if (method.accessFlags().contains(AccessFlag.ABSTRACT)) {
+                if (!method.accessFlags().contains(AccessFlag.PROTECTED) && !method.accessFlags().contains(AccessFlag.PUBLIC)) {
+                    throw new RuntimeException("Abstract method to implement must be protected or public: "+formatMethod(method));
+                }
+                if (method.getParameterTypes().length != 0) {
+                    throw new RuntimeException("Abstract method to implement must not have parameters: "+formatMethod(method));
+                }
+                var name = method.getName();
+                var generic = method.getReturnType();
+                if (generic.isPrimitive()) {
+                    throw new RuntimeException("Cannot inject primitive types: "+formatMethod(method));
+                }
+                var specific = EvaluatedType.of(method.getGenericReturnType());
+
+                var args = new ArrayList<>();
+                if (method.isAnnotationPresent(Label.class)) {
+                    var label = method.getAnnotation(Label.class);
+                    var labelValue = label.value();
+                    args.add(labelValue);
+                }
+
+                if (methods.containsKey(name)) {
+                    var existing = methods.get(name);
+                    if (!existing.specific().equals(specific)) {
+                        throw new RuntimeException("Duplicate abstract getter with differing types: "+formatMethod(method));
+                    }
+                    continue;
+                }
+                if (implementedMethods.containsKey(name)) {
+                    var existing = implementedMethods.get(name);
+                    if (!existing.specific().equals(specific)) {
+                        throw new RuntimeException("Duplicate abstract getter with differing types: "+formatMethod(method));
+                    }
+                }
+                implementedMethods.put(name, new ImplementedMethod(name, generic, specific, (method.accessFlags().contains(AccessFlag.PUBLIC)), args.toArray()));
             }
         }
+    }
+
+    private static String formatMethod(Method method) {
+        return method.getName()+MethodType.methodType(method.getReturnType(), method.getParameterTypes()).descriptorString()+" in "+method.getDeclaringClass();
     }
 
     static <T> Function<T, ?> wrap(Class<T> initialClazz) {
@@ -152,7 +219,8 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
         }
 
         List<EvaluatedType> injectedTypes = new ArrayList<>();
-        List<Class<?>> injectedClassTypes = new ArrayList<>();
+        List<Instantiation> instantiations = new ArrayList<>();
+        List<Class<?>> ctorTypes = new ArrayList<>();
 
         Constructor<?> targetCtor = null;
         Constructor<?> noArgCtor = null;
@@ -181,11 +249,13 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
             var type = param.getParameterizedType();
             var erased = param.getType();
             injectedTypes.add(EvaluatedType.of(type));
-            injectedClassTypes.add(erased);
+            ctorTypes.add(erased);
             targetCtorArgs.add(erased);
         }
 
-        var methods = collectInjectedMethods(clazz);
+        var methods = new LinkedHashMap<String, InjectedMethod>();
+        var implementedMethods = new LinkedHashMap<String, ImplementedMethod>();
+        collectInjectedMethods(clazz, methods, implementedMethods);
 
         if (methods.isEmpty() && (targetCtor.getModifiers() & Modifier.PUBLIC) != 0 && (clazz.getModifiers() & Modifier.ABSTRACT) == 0) {
             try {
@@ -217,12 +287,12 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
         implementationMethod.visitMaxs(0, 0);
         implementationMethod.visitEnd();
 
-        for (var method : methods) {
+        for (var method : methods.values()) {
             var fieldName = "$syringe_injected_field$"+method.name;
             var field = writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, fieldName, Provider.class.descriptorString(), null, null);
             field.visitEnd();
             injectedTypes.add(new EvaluatedType(Provider.class, List.of(method.specific())));
-            injectedClassTypes.add(Provider.class);
+            ctorTypes.add(Provider.class);
             var methodImpl = writer.visitMethod(
                 (method.isPublic()? Opcodes.ACC_PUBLIC : Opcodes.ACC_PROTECTED) | Opcodes.ACC_FINAL,
                 method.name,
@@ -240,7 +310,28 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
             methodImpl.visitEnd();
         }
 
-        var ctorType = MethodType.methodType(void.class, injectedClassTypes);
+        for (var method : implementedMethods.values()) {
+            var fieldName = "$syringe_injected_field$"+method.name;
+            var field = writer.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, fieldName, method.erased.descriptorString(), null, null);
+            field.visitEnd();
+            instantiations.add(new Instantiation(method.specific(), method.args()));
+            ctorTypes.add(method.erased());
+            var methodImpl = writer.visitMethod(
+                (method.isPublic()? Opcodes.ACC_PUBLIC : Opcodes.ACC_PROTECTED) | Opcodes.ACC_FINAL,
+                method.name,
+                MethodType.methodType(method.erased()).descriptorString(),
+                null,
+                null
+            );
+            methodImpl.visitCode();
+            methodImpl.visitVarInsn(Opcodes.ALOAD, 0);
+            methodImpl.visitFieldInsn(Opcodes.GETFIELD, name, fieldName, method.erased.descriptorString());
+            methodImpl.visitInsn(Opcodes.ARETURN);
+            methodImpl.visitMaxs(0, 0);
+            methodImpl.visitEnd();
+        }
+
+        var ctorType = MethodType.methodType(void.class, ctorTypes);
 
         var ctor = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", ctorType.descriptorString(), null, null);
         ctor.visitCode();
@@ -249,10 +340,16 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
             var type = Type.getType(argType);
             index += type.getSize();
         }
-        for (var method : methods) {
+        for (var method : methods.values()) {
             ctor.visitVarInsn(Opcodes.ALOAD, 0);
             ctor.visitVarInsn(Opcodes.ALOAD, index);
             ctor.visitFieldInsn(Opcodes.PUTFIELD, name, "$syringe_injected_field$"+method.name, Provider.class.descriptorString());
+            index++;
+        }
+        for (var method : implementedMethods.values()) {
+            ctor.visitVarInsn(Opcodes.ALOAD, 0);
+            ctor.visitVarInsn(Opcodes.ALOAD, index);
+            ctor.visitFieldInsn(Opcodes.PUTFIELD, name, "$syringe_injected_field$"+method.name, method.erased.descriptorString());
             index++;
         }
         ctor.visitVarInsn(Opcodes.ALOAD, 0);
@@ -274,7 +371,7 @@ record InjectedImplementation(FastInvoker constructor, List<EvaluatedType> injec
         try {
             var implementationLookup = Bootstrap.ATTACHMENT_TARGET.defineHiddenClass(bytes, false);
             var ctorHandle = implementationLookup.findConstructor(implementationLookup.lookupClass(), ctorType);
-            return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes, List.of(), targetCtorArgs.size());
+            return new InjectedImplementation(FastInvoker.create(ctorHandle), injectedTypes, instantiations, targetCtorArgs.size());
         } catch (IllegalAccessException | NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
