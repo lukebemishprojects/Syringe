@@ -193,16 +193,21 @@ sealed abstract class ObjectProvider<T> {
 
     record CtorInjectionParameter<T>(QualifiedType<T> type, boolean provider) {}
 
-    record CtorInjection(List<CtorInjectionParameter<?>> injections, Constructor<?> constructor) implements Injection {
+    sealed interface CtorLikeInjection extends Injection {
+        List<CtorInjectionParameter<?>> injections();
+
         @Override
-        public Collection<ProviderQualifiedType<?>> types() {
+        default Collection<ProviderQualifiedType<?>> types() {
             var list = new ArrayList<ProviderQualifiedType<?>>();
-            for (var parameter : injections) {
+            for (var parameter : injections()) {
                 list.add(new ProviderQualifiedType<>(parameter.type(), parameter.provider()));
             }
             return list;
         }
     }
+
+    record CtorInjection(List<CtorInjectionParameter<?>> injections, Constructor<?> constructor) implements CtorLikeInjection {}
+    record ProvidesInjection(List<CtorInjectionParameter<?>> injections, Method constructor) implements CtorLikeInjection {}
 
     record GetterInjection<T>(QualifiedType<T> type, Method method, boolean provider) implements Injection {
         @Override
@@ -268,17 +273,32 @@ sealed abstract class ObjectProvider<T> {
                     ctor = constructor;
                 }
             }
-            if (ctor == null) {
+            Method provider = null;
+            for (var method : type.getDeclaredMethods()) {
+                if (method.accessFlags().contains(AccessFlag.STATIC) && method.getReturnType().equals(type)) {
+                    if (method.isAnnotationPresent(Provides.class)) {
+                        if (provider != null) {
+                            throw new IllegalArgumentException("Multiple static @Provides methods for " + type);
+                        }
+                        provider = method;
+                    }
+                }
+            }
+            if (ctor == null && provider == null) {
                 try {
                     ctor = type.getDeclaredConstructor();
                 } catch (NoSuchMethodException e) {
                     throw new IllegalArgumentException("No no-arg constructor or @Inject-marked constructor for " + type);
                 }
+            } else if (provider != null && ctor != null) {
+                throw new IllegalArgumentException("Cannot have both @Inject constructor and @Provides method for " + type);
             }
 
             var ctorParameters = new ArrayList<CtorInjectionParameter<?>>();
-            for (int i = 0; i < ctor.getParameters().length; i++) {
-                var parameter = ctor.getParameters()[i];
+
+            var initParameterArray = provider == null ? ctor.getParameters() : provider.getParameters();
+            for (int i = 0; i < initParameterArray.length; i++) {
+                var parameter = initParameterArray[i];
                 var parameterType = parameter.getType();
                 if (parameterType == Provider.class) {
                     if (parameter.getParameterizedType() instanceof ParameterizedType parameterizedType && parameterizedType.getActualTypeArguments()[0] instanceof Class<?> providerType) {
@@ -290,7 +310,7 @@ sealed abstract class ObjectProvider<T> {
                     ctorParameters.add(new CtorInjectionParameter<>(new QualifiedType<>(parameterType, qualifiersOn(parameter)), false));
                 }
             }
-            final var ctorInjection = new CtorInjection(ctorParameters, ctor);
+            final var ctorInjection = provider == null ? new CtorInjection(ctorParameters, ctor) : new ProvidesInjection(ctorParameters, provider);
 
             final List<SetOnObjectInjection> setterInjections = new ArrayList<>();
             final List<GetterInjection<?>> getterInjections = new ArrayList<>();
@@ -436,15 +456,23 @@ sealed abstract class ObjectProvider<T> {
                     if (!type.accessFlags().contains(AccessFlag.PUBLIC)) {
                         throw new IllegalArgumentException("Class "+type+" must be public to have abstract @Inject methods or @Binds methods");
                     }
+
+                    if (ctor == null) {
+                        throw new IllegalArgumentException("Class "+type+" cannot have abstract @Inject methods or @Binds methods with a @Provides static factory method");
+                    }
+
                     if (!ctor.accessFlags().contains(AccessFlag.PUBLIC) && !ctor.accessFlags().contains(AccessFlag.PROTECTED)) {
                         throw new IllegalArgumentException("Injectable constructor for class " + type + " must be public or protected to have abstract @Inject methods or @Binds methods");
                     }
 
-                    handle = implementAbstract(type, getterInjections, bindings, ctorInjection.constructor());
+                    handle = implementAbstract(type, getterInjections, bindings, ((CtorInjection) ctorInjection).constructor());
                 } else {
                     handle = factory -> {
                         try {
-                            return forConstructor(ctorInjection.constructor()).unreflectConstructor(ctorInjection.constructor());
+                            return switch (ctorInjection) {
+                                case CtorInjection ctorInjectionImpl -> forConstructor(ctorInjectionImpl.constructor()).unreflectConstructor(ctorInjectionImpl.constructor());
+                                case ProvidesInjection providesInjection -> forMethod(providesInjection.constructor()).unreflect(providesInjection.constructor());
+                            };
                         } catch (IllegalAccessException e) {
                             throw new RuntimeException(e);
                         }
