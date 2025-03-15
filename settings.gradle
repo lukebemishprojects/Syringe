@@ -4,19 +4,12 @@ pluginManagement {
         maven {
             url "https://maven.lukebemish.dev/releases/"
         }
-        maven {
-            url "https://maven.neoforged.net/releases/"
-        }
-    }
-    plugins {
-        id 'net.neoforged.moddev' version '1.0.11'
     }
 }
 
 plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
     id 'dev.lukebemish.conventions' version '0.1.10'
-    id 'net.neoforged.moddev.repositories' version '1.0.11'
 }
 
 dependencyResolutionManagement {

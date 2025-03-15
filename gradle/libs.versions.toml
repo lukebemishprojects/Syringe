@@ -1,0 +1,19 @@
+[versions]
+
+jakarta-inject = "2.0.1"
+
+junitjupiter = "5.8.1"
+junit = "4.13.2"
+asm = "9.5"
+
+[libraries]
+
+jakarta-inject-api = { group = "jakarta.inject", name = "jakarta.inject-api", version.ref = "jakarta-inject" }
+jakarta-inject-tck = { group = "jakarta.inject", name = "jakarta.inject-tck", version.ref = "jakarta-inject" }
+
+junit_jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junitjupiter" }
+junit_platform_launcher = { module = "org.junit.platform:junit-platform-launcher" }
+junit_vintage_engine = { module = "org.junit.vintage:junit-vintage-engine" }
+junit_junit = { module = "junit:junit", version.ref = "junit" }
+
+asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
