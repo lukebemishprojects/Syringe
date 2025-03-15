@@ -17,7 +17,7 @@ import org.atinject.tck.auto.Tire;
 import org.atinject.tck.auto.V8Engine;
 import org.atinject.tck.auto.accessories.SpareTire;
 
-public class BootstrapTCK {
+public class TestTCK {
     public static Test suite() {
         var component = ObjectFactory.create().instance(TckComponent.class);
         Car tckCar = component.getObjectFactory().instance(Car.class);
