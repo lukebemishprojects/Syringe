@@ -107,7 +107,7 @@ sealed abstract class ObjectProvider<T> {
     }
 
     record Creator<T>(Function<ObjectFactory, MethodHandle> handle, List<ProviderQualifiedType<?>> parameters) {
-        ObjectProvider<T> bind(ObjectFactory factory, boolean singleton) {
+        ObjectProvider<T> bind(ObjectFactory factory, ObjectFactory instantiatorFactory, boolean singleton) {
             return new MemoizeObjectProvider<>(() -> {
                 List<MethodHandle> parameterSuppliers = new ArrayList<>();
                 for (var parameter : parameters) {
@@ -121,8 +121,8 @@ sealed abstract class ObjectProvider<T> {
                     }
                 }
 
-                // Now, a single combined handle from the Creator handle
-                var supplierHandle = handle().apply(factory);
+                // Now, a single combined handle from the Creator handle -- but we make sure to use the instantiation factory, so that components are instantiated with their parent factory but resolved with their own.
+                var supplierHandle = handle().apply(instantiatorFactory);
                 for (var supplier : parameterSuppliers) {
                     supplierHandle = MethodHandles.collectArguments(supplierHandle, 0, supplier);
                 }
@@ -243,7 +243,7 @@ sealed abstract class ObjectProvider<T> {
 
     @SuppressWarnings("unchecked")
     static <T> ObjectProvider<T> forType(Class<T> type, ObjectFactory factory, boolean singleton) {
-        return ((Creator<T>) creators.get(type)).bind(factory, singleton);
+        return ((Creator<T>) creators.get(type)).bind(factory, factory, singleton);
     }
 
     private static final ClassValue<Creator<?>> creators = new ClassValue<>() {

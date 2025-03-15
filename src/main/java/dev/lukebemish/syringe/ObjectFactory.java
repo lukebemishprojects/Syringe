@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.AccessFlag;
 import java.lang.reflect.ParameterizedType;
 import java.util.ArrayList;
@@ -74,6 +75,22 @@ public final class ObjectFactory {
                     // We look through all the various methods of the class to find ones with @Provides or @Binds.
                     // These should all turn into providers. Notably -- if they have scopes, those _must_ be compatible with this factory.
                     for (var method : clazz.getDeclaredMethods()) {
+                        if (method.accessFlags().contains(AccessFlag.PUBLIC) || method.accessFlags().contains(AccessFlag.PROTECTED)) {
+                            var packageMethodRef = new PackageMethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()), clazz.getPackageName());
+                            var methodRef = new MethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()));
+                            packageMethodsVisited.add(packageMethodRef);
+                            if (!methodsVisited.add(methodRef)) {
+                                // This was overridden in a subclass
+                                continue;
+                            }
+                        } else if (!method.accessFlags().contains(AccessFlag.PRIVATE)) {
+                            var packageMethodRef = new PackageMethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()), clazz.getPackageName());
+                            if (!packageMethodsVisited.add(packageMethodRef)) {
+                                // This was overridden in a subclass
+                                continue;
+                            }
+                        }
+
                         var hasProvides = method.getAnnotation(Provides.class) != null;
                         var hasBinds = method.getAnnotation(Binds.class) != null;
                         if (hasProvides && method.accessFlags().contains(AccessFlag.ABSTRACT)) {
@@ -96,8 +113,8 @@ public final class ObjectFactory {
                                 }
                             }
 
-                            if (method.accessFlags().contains(AccessFlag.STATIC)) {
-                                throw new IllegalArgumentException("Method "+method+" is static, but methods with @Provides or @Binds must not be");
+                            if (method.accessFlags().contains(AccessFlag.STATIC) && (hasBinds || (hasProvides && method.getReturnType().equals(clazz)))) {
+                                throw new IllegalArgumentException("Method "+method+" is static, but methods with @Provides or @Binds must not be unless they are static factory methods with @Provides");
                             }
 
                             MethodHandles.Lookup lookup = MethodHandles.lookup();
@@ -128,7 +145,7 @@ public final class ObjectFactory {
                                     parameters.add(new ObjectProvider.ProviderQualifiedType<>(new QualifiedType<>(parameterType, parameterQualifiers), isProvider));
                                 }
                                 var creator = new ObjectProvider.Creator<>(factory -> handle, parameters);
-                                child.implementations.put(new QualifiedType<>(method.getReturnType(), qualifiers), creator.bind(child, isScoped));
+                                child.implementations.put(new QualifiedType<>(method.getReturnType(), qualifiers), creator.bind(child, ObjectFactory.this, isScoped));
                             } catch (IllegalAccessException e) {
                                 throw new RuntimeException(e);
                             }

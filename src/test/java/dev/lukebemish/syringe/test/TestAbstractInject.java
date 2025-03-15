@@ -12,6 +12,11 @@ public class TestAbstractInject {
     public abstract static class Foo {
         @Inject protected abstract Bar getBar();
         @Inject protected abstract Provider<Bar> getBarProvider();
+        private final Bar bar;
+
+        @Inject protected Foo(Bar bar) {
+            this.bar = bar;
+        }
     }
 
     @Test
@@ -21,5 +26,6 @@ public class TestAbstractInject {
         var provider = foo.getBarProvider();
         Assertions.assertNotNull(provider);
         Assertions.assertNotNull(provider.get());
+        Assertions.assertNotNull(foo.bar);
     }
 }

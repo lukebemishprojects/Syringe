@@ -41,10 +41,8 @@ public final class Instantiator {
         mv.visitVarInsn(Opcodes.ALOAD, 0);
         int localOffset = 1;
         for (var param : superCtor.getParameterTypes()) {
-            mv.visitVarInsn(Type.getType(param).getOpcode(Opcodes.ILOAD), localOffset);
             localOffset+=Type.getType(param).getSize();
         }
-        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, Type.getInternalName(type), "<init>", Type.getConstructorDescriptor(superCtor), false);
         for (int i = 0; i < getterInjections.size(); i++) {
             var getter = getterInjections.get(i);
             Class<?> getterType = getter.provider() ? Provider.class : getter.type().type();
@@ -53,6 +51,12 @@ public final class Instantiator {
             mv.visitFieldInsn(Opcodes.PUTFIELD, name, "$$syringe$"+i, getterType.descriptorString());
             localOffset+=Type.getType(getterType).getSize();
         }
+        localOffset = 1;
+        for (var param : superCtor.getParameterTypes()) {
+            mv.visitVarInsn(Type.getType(param).getOpcode(Opcodes.ILOAD), localOffset);
+            localOffset+=Type.getType(param).getSize();
+        }
+        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, Type.getInternalName(type), "<init>", Type.getConstructorDescriptor(superCtor), false);
         mv.visitInsn(Opcodes.RETURN);
         mv.visitMaxs(0, 0);
         mv.visitEnd();
