@@ -15,12 +15,31 @@ import java.util.List;
 public final class Instantiator {
     private final MethodHandles.Lookup lookup;
 
-    public Instantiator(MethodHandles.Lookup lookup) {
+    private Instantiator(MethodHandles.Lookup lookup) {
         this.lookup = lookup;
     }
 
-    public Instantiator() {
-        this(MethodHandles.lookup());
+    public static final class Builder {
+        private MethodHandles.Lookup lookup = MethodHandles.lookup();
+
+        public Builder lookup(MethodHandles.Lookup lookup) {
+            this.lookup = lookup;
+            return this;
+        }
+
+        public Instantiator build() {
+            return new Instantiator(lookup);
+        }
+
+        private Builder() {}
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    MethodHandles.Lookup privateIn(Class<?> clazz) throws IllegalAccessException {
+        return MethodHandles.privateLookupIn(clazz, lookup);
     }
 
     MethodHandles.Lookup implementAbstract(Class<?> type, List<ObjectProvider.GetterInjection<?>> getterInjections, List<ObjectProvider.Binding<?>> bindings, Constructor<?> superCtor) {
@@ -30,7 +49,10 @@ public final class Instantiator {
         var ctorParams = new ArrayList<>(Arrays.asList(superCtor.getParameterTypes()));
         for (int i = 0; i < getterInjections.size(); i++) {
             var getter = getterInjections.get(i);
-            Class<?> getterType = getter.provider() ? Provider.class : getter.type().type();
+            Class<?> getterType = switch (getter.specific()) {
+                case PROVIDER -> Provider.class;
+                case PLAIN, LAZY -> Lazy.class;
+            };
             ctorParams.add(getterType);
             var fv = cv.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, "$$syringe$"+i, Type.getDescriptor(getterType), null, null);
             fv.visitEnd();
@@ -45,7 +67,10 @@ public final class Instantiator {
         }
         for (int i = 0; i < getterInjections.size(); i++) {
             var getter = getterInjections.get(i);
-            Class<?> getterType = getter.provider() ? Provider.class : getter.type().type();
+            Class<?> getterType = switch (getter.specific()) {
+                case PROVIDER -> Provider.class;
+                case PLAIN, LAZY -> Lazy.class;
+            };
             mv.visitVarInsn(Opcodes.ALOAD, 0);
             mv.visitVarInsn(Opcodes.ALOAD, localOffset);
             mv.visitFieldInsn(Opcodes.PUTFIELD, name, "$$syringe$"+i, getterType.descriptorString());
@@ -64,11 +89,18 @@ public final class Instantiator {
         // Implement the getters
         for (int i = 0; i < getterInjections.size(); i++) {
             var getter = getterInjections.get(i);
-            var getterType = getter.provider() ? Provider.class : getter.type().type();
+            Class<?> getterType = switch (getter.specific()) {
+                case PROVIDER -> Provider.class;
+                case PLAIN, LAZY -> Lazy.class;
+            };
             var mv2 = cv.visitMethod(Opcodes.ACC_PUBLIC, getter.method().getName(), Type.getMethodDescriptor(getter.method()), null, null);
             mv2.visitCode();
             mv2.visitVarInsn(Opcodes.ALOAD, 0);
             mv2.visitFieldInsn(Opcodes.GETFIELD, name, "$$syringe$"+i, Type.getDescriptor(getterType));
+            if (getter.specific().equals(ObjectProvider.SpecificType.PLAIN)) {
+                mv2.visitMethodInsn(Opcodes.INVOKEINTERFACE, Type.getInternalName(Lazy.class), "get", MethodType.methodType(Object.class).descriptorString(), true);
+                mv2.visitTypeInsn(Opcodes.CHECKCAST, Type.getInternalName(getter.type().type()));
+            }
             mv2.visitInsn(Opcodes.ARETURN);
             mv2.visitMaxs(0, 0);
             mv2.visitEnd();

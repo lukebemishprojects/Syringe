@@ -9,7 +9,8 @@ import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.AccessFlag;
-import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.AnnotatedElement;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -17,171 +18,263 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 public final class ObjectFactory {
     private final Set<Class<? extends Annotation>> scope;
-    private final Map<QualifiedType<?>, ObjectProvider<?>> implementations = new HashMap<>();
-    private final @Nullable ObjectFactory parent;
+    private final Map<QualifiedType<?>, ObjectProvider<?>> scoped = new HashMap<>();
+    private final Map<QualifiedType<?>, ObjectProvider.Creator<?>> creators = new HashMap<>();
+    private final Map<QualifiedType<?>, ObjectProvider<?>> boundCreators = new HashMap<>();
+    final @Nullable ObjectFactory parent;
 
     private ObjectFactory(Set<Class<? extends Annotation>> scope, @Nullable ObjectFactory parent) {
         this.scope = scope;
         this.parent = parent;
-    }
 
-    {
-        implementations.put(new QualifiedType<>(ObjectFactory.class, Set.of()), ObjectProvider.of(this));
+        scoped.put(new QualifiedType<>(ObjectFactory.class, Set.of()), ObjectProvider.of(this));
+
+        var baseInstantiator = parent == null ? Instantiator.builder().build() : parent.findOrMakeProvider(new QualifiedType<>(Instantiator.class, Set.of())).create();
+        scoped.put(new QualifiedType<>(Instantiator.class, Set.of()), ObjectProvider.of(baseInstantiator));
     }
 
     @SuppressWarnings("unchecked")
-    <T> ObjectProvider<T> objectProvider(QualifiedType<T> type) {
-        var impl = implementations.get(type);
+    <T> @Nullable ObjectProvider<T> findScoped(QualifiedType<T> type) {
+        var impl = scoped.get(type);
         if (impl != null) {
             return (ObjectProvider<T>) impl;
         }
+        return parent == null ? null : parent.findScoped(type);
+    }
 
-        var isScoped = false;
-        var scopedAnnotations = Arrays.stream(type.type().getAnnotations())
-            .filter(annotation -> annotation.annotationType().getAnnotation(Scope.class) != null)
-            .toList();
-        if (scopedAnnotations.size() == 1) {
-            var annotation = scopedAnnotations.getFirst();
-            if (scope.contains(annotation.annotationType())) {
-                isScoped = true;
-            } else {
-                // This factory cannot handle this scope -- try the parent.
-                if (parent == null) {
-                    throw new IllegalArgumentException("Class "+type.type()+" has unsupported scope "+annotation.annotationType());
-                }
-                return parent.objectProvider(type);
-            }
-        } else if (!scopedAnnotations.isEmpty()) {
-            throw new IllegalArgumentException("Class "+type.type()+" has multiple scopes "+scopedAnnotations);
+    @SuppressWarnings("unchecked")
+    <T> ObjectProvider.@Nullable Creator<T> findCreator(QualifiedType<T> type) {
+        var impl = creators.get(type);
+        if (impl != null) {
+            return (ObjectProvider.Creator<T>) impl;
+        }
+        return parent == null ? null : parent.findCreator(type);
+    }
+
+    @SuppressWarnings("unchecked")
+    <T> ObjectProvider<T> findOrMakeProvider(QualifiedType<T> type) {
+        var boundCreator = boundCreators.get(type);
+        if (boundCreator != null) {
+            return (ObjectProvider<T>) boundCreator;
+        }
+        var creator = findCreator(type);
+        if (creator != null) {
+            var provider = creator.bind(this, this.instantiator(), false);
+            boundCreators.put(type, provider);
+            return provider;
+        }
+        var scoped = findScoped(type);
+        if (scoped != null) {
+            return scoped;
         }
 
+        ObjectFactory topMostFactory = findScopedFactory(type.type());
+        if (topMostFactory != null) {
+            // Scoped
+            return topMostFactory.createScoped(type);
+        }
+
+        // Make unscoped creator
         if (!type.qualifiers().isEmpty()) {
             throw new IllegalArgumentException("Class "+type.type()+" with qualifiers "+type.qualifiers()+", but no matching provider could be found");
         }
 
-        var component = type.type().getAnnotation(Component.class);
-        if (component != null) {
-            var scopes = Set.of(component.scopes());
-            var child = new ObjectFactory(scopes, this);
-            Set<PackageMethodRef> packageMethodsVisited = new HashSet<>();
-            Set<MethodRef> methodsVisited = new HashSet<>();
+        var newCreator = ObjectProvider.creatorForType(type.type(), instantiator());
+        creators.put(type, newCreator);
+        var bound = newCreator.bind(this, instantiator(), false);
+        boundCreators.put(type, bound);
+        return bound;
+    }
 
-            Consumer<Class<?>> typeConsumer = new Consumer<>() {
-                @Override
-                public void accept(Class<?> clazz) {
+    private @Nullable ObjectFactory findScopedFactory(AnnotatedElement element) {
+        // some special-casing for things used in the ObjectFactory itself
+        if (element == Instantiator.class || (element instanceof Method method && method.getReturnType() == Instantiator.class)) {
+            return this;
+        }
+
+        var allAnnotations = Arrays.stream(element.getAnnotations())
+            .<Class<? extends Annotation>>map(Annotation::annotationType)
+            .collect(Collectors.toCollection(HashSet::new));
+        var creatingFactory = this;
+        ObjectFactory topMostFactory = null;
+        while (creatingFactory != null) {
+            if (allAnnotations.removeAll(creatingFactory.scope)) {
+                // If we removed anything, then this scope is necessary
+                topMostFactory = creatingFactory;
+            }
+
+            creatingFactory = creatingFactory.parent;
+        }
+        var nonMatchingScopedAnnotations = allAnnotations.stream()
+            .filter(annotation -> annotation.isAnnotationPresent(Scope.class))
+            .toList();
+        if (!nonMatchingScopedAnnotations.isEmpty()) {
+            throw new IllegalArgumentException(element+" has unsupported scopes "+nonMatchingScopedAnnotations);
+        }
+        return topMostFactory;
+    }
+
+    private Instantiator instantiator() {
+        return findOrMakeProvider(new QualifiedType<>(Instantiator.class, Set.of())).create();
+    }
+
+    private <T> ObjectProvider<T> createScoped(QualifiedType<T> type) {
+        var newCreator = ObjectProvider.creatorForType(type.type(), findOrMakeProvider(new QualifiedType<>(Instantiator.class, Set.of())).create());
+        var newProvider = newCreator.bind(this, instantiator(), true);
+        scoped.put(type, newProvider);
+        return newProvider;
+    }
+
+    public ObjectFactory within(Object component) {
+        var type = component.getClass();
+        var scopes = new HashSet<Class<? extends Annotation>>();
+        var child = new ObjectFactory(scopes, this);
+        Set<PackageMethodRef> packageMethodsVisited = new HashSet<>();
+        Set<MethodRef> methodsVisited = new HashSet<>();
+
+        Consumer<Class<?>> typeConsumer = new Consumer<>() {
+            @Override
+            public void accept(Class<?> clazz) {
+                if (!clazz.isHidden()) {
+                    // Skip hidden classes
+
+                    if (clazz.isAnnotationPresent(Component.class)) {
+                        var component = clazz.getAnnotation(Component.class);
+                        scopes.addAll(Set.of(component.scopes()));
+                    }
+
                     // We look through all the various methods of the class to find ones with @Provides or @Binds.
                     // These should all turn into providers. Notably -- if they have scopes, those _must_ be compatible with this factory.
                     for (var method : clazz.getDeclaredMethods()) {
-                        if (method.accessFlags().contains(AccessFlag.PUBLIC) || method.accessFlags().contains(AccessFlag.PROTECTED)) {
-                            var packageMethodRef = new PackageMethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()), clazz.getPackageName());
-                            var methodRef = new MethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()));
-                            packageMethodsVisited.add(packageMethodRef);
-                            if (!methodsVisited.add(methodRef)) {
-                                // This was overridden in a subclass
-                                continue;
-                            }
-                        } else if (!method.accessFlags().contains(AccessFlag.PRIVATE)) {
-                            var packageMethodRef = new PackageMethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()), clazz.getPackageName());
-                            if (!packageMethodsVisited.add(packageMethodRef)) {
-                                // This was overridden in a subclass
-                                continue;
-                            }
-                        }
-
-                        var hasProvides = method.getAnnotation(Provides.class) != null;
-                        var hasBinds = method.getAnnotation(Binds.class) != null;
-                        if (hasProvides && method.accessFlags().contains(AccessFlag.ABSTRACT)) {
-                            throw new IllegalArgumentException("Method "+method+" is abstract, but methods with @Provides must not be");
-                        } else if (hasBinds && !method.accessFlags().contains(AccessFlag.ABSTRACT)) {
-                            throw new IllegalArgumentException("Method "+method+" is not abstract, but methods with @Binds must be");
-                        } else if (hasProvides && hasBinds) {
-                            throw new IllegalArgumentException("Method "+method+" has both @Provides and @Binds");
-                        }
-                        if (hasProvides || hasBinds) {
-                            boolean isScoped = false;
-                            for (var annotation : method.getAnnotations()) {
-                                if (annotation.annotationType().getAnnotation(Scope.class) != null) {
-                                    if (!scope.contains(annotation.annotationType())) {
-                                        throw new IllegalArgumentException("Method "+method+" has scope "+annotation.annotationType()+" which is not compatible with "+scopes);
-                                    } else if (isScoped) {
-                                        throw new IllegalArgumentException("Method "+method+" has multiple scopes");
-                                    }
-                                    isScoped = true;
+                        if (!method.accessFlags().contains(AccessFlag.STATIC)) {
+                            if (method.accessFlags().contains(AccessFlag.PUBLIC) || method.accessFlags().contains(AccessFlag.PROTECTED)) {
+                                var packageMethodRef = new PackageMethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()), clazz.getPackageName());
+                                var methodRef = new MethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()));
+                                packageMethodsVisited.add(packageMethodRef);
+                                if (!methodsVisited.add(methodRef)) {
+                                    // This was overridden in a subclass
+                                    continue;
+                                }
+                            } else if (!method.accessFlags().contains(AccessFlag.PRIVATE)) {
+                                var packageMethodRef = new PackageMethodRef(method.getName(), MethodType.methodType(method.getReturnType(), method.getParameterTypes()), clazz.getPackageName());
+                                if (!packageMethodsVisited.add(packageMethodRef)) {
+                                    // This was overridden in a subclass
+                                    continue;
                                 }
                             }
+                        }
 
-                            if (method.accessFlags().contains(AccessFlag.STATIC) && (hasBinds || (hasProvides && method.getReturnType().equals(clazz)))) {
-                                throw new IllegalArgumentException("Method "+method+" is static, but methods with @Provides or @Binds must not be unless they are static factory methods with @Provides");
+                        var hasProvides = method.isAnnotationPresent(Provides.class);
+                        var hasBinds = method.isAnnotationPresent(Binds.class);
+                        if (hasProvides && method.accessFlags().contains(AccessFlag.ABSTRACT)) {
+                            throw new IllegalArgumentException("Method " + method + " is abstract, but methods with @Provides must not be");
+                        } else if (hasBinds && !method.accessFlags().contains(AccessFlag.ABSTRACT)) {
+                            throw new IllegalArgumentException("Method " + method + " is not abstract, but methods with @Binds must be");
+                        } else if (hasProvides && hasBinds) {
+                            throw new IllegalArgumentException("Method " + method + " has both @Provides and @Binds");
+                        }
+                        if (hasProvides || hasBinds) {
+                            if (method.accessFlags().contains(AccessFlag.STATIC)) {
+                                if (method.getReturnType().equals(clazz)) {
+                                    continue;
+                                }
+                                throw new IllegalArgumentException("Method " + method + " is static, but methods with @Provides or @Binds must not be unless they are static factory methods with @Provides");
                             }
 
-                            MethodHandles.Lookup lookup = MethodHandles.lookup();
-                            try {
-                                lookup = MethodHandles.privateLookupIn(clazz, lookup);
-                            } catch (IllegalAccessException ignored) {
-                                // We just won't have private access -- if that causes other issues, so be it.
+                            var scopedFactory = findScopedFactory(method);
+                            if (scopedFactory != null && scopedFactory != ObjectFactory.this) {
+                                throw new IllegalArgumentException("Component @Provides method " + method + " has scope that is not compatible with the component");
                             }
+
+                            boolean isScoped = scopedFactory != null;
+
+                            MethodHandles.Lookup lookup = ObjectProvider.privateIn(clazz, instantiator());
 
                             var qualifiers = ObjectProvider.qualifiersOn(method);
 
+                            if (method.getReturnType().equals(ObjectFactory.class) && qualifiers.isEmpty()) {
+                                throw new IllegalArgumentException("Components may not provide ObjectFactory without qualifiers");
+                            }
+
                             try {
-                                var handle = lookup.unreflect(method);
-                                var parameters = new ArrayList<ObjectProvider.ProviderQualifiedType<?>>();
-                                parameters.add(new ObjectProvider.ProviderQualifiedType<>(type, false));
+                                var handle = lookup.unreflect(method).bindTo(component);
+                                var parameters = new ArrayList<ObjectProvider.InjectedParameterType>();
                                 for (var parameter : method.getParameters()) {
-                                    var parameterType = parameter.getType();
-                                    var parameterQualifiers = ObjectProvider.qualifiersOn(parameter);
-                                    var isProvider = false;
-                                    if (parameterType.equals(Provider.class)) {
-                                        if (parameter.getParameterizedType() instanceof ParameterizedType parameterizedType && parameterizedType.getActualTypeArguments()[0] instanceof Class<?> providerType) {
-                                            isProvider = true;
-                                            parameterType = providerType;
-                                        } else {
-                                            throw new IllegalArgumentException("Cannot understand type of Provider parameter " + parameter);
-                                        }
+                                    if (parameter.isAnnotationPresent(Assisted.class)) {
+                                        parameters.add(new ObjectProvider.AssistedParameterType(parameter.getType()));
+                                        continue;
                                     }
-                                    parameters.add(new ObjectProvider.ProviderQualifiedType<>(new QualifiedType<>(parameterType, parameterQualifiers), isProvider));
+                                    var parameterType = new Class<?>[]{parameter.getType()};
+                                    var parameterQualifiers = ObjectProvider.qualifiersOn(parameter);
+                                    var specific = new ObjectProvider.SpecificType[1];
+                                    ObjectProvider.specificForType(parameterType[0], parameter.getParameterizedType(), parameterQualifiers, (s, c) -> {
+                                        specific[0] = s;
+                                        parameterType[0] = c;
+                                    });
+                                    parameters.add(new ObjectProvider.SpecificQualifiedType<>(new QualifiedType<>(parameterType[0], parameterQualifiers), specific[0]));
                                 }
-                                var creator = new ObjectProvider.Creator<>(factory -> handle, parameters);
-                                child.implementations.put(new QualifiedType<>(method.getReturnType(), qualifiers), creator.bind(child, ObjectFactory.this, isScoped));
+                                var qualifiedType = new QualifiedType<>(method.getReturnType(), qualifiers);
+                                var creator = new ObjectProvider.Creator<>(qualifiedType, instantiator -> handle, parameters);
+                                var provider = creator.bind(child, instantiator(), isScoped);
+
+                                if (isScoped) {
+                                    child.scoped.put(qualifiedType, provider);
+                                } else {
+                                    child.creators.put(qualifiedType, creator);
+                                    child.boundCreators.put(qualifiedType, provider);
+                                }
                             } catch (IllegalAccessException e) {
                                 throw new RuntimeException(e);
                             }
                         }
                     }
-
-                    var superType = clazz.getSuperclass();
-                    if (superType != null && !superType.equals(Object.class)) {
-                        accept(superType);
-                    }
-                    for (var interfaceType : clazz.getInterfaces()) {
-                        accept(interfaceType);
-                    }
                 }
-            };
-            typeConsumer.accept(type.type());
-            var provider = ObjectProvider.forType(type.type(), child, true);
-            if (isScoped) {
-                implementations.put(type, provider);
-            }
-            return provider;
-        }
 
-        var provider = ObjectProvider.forType(type.type(), this, isScoped);
-        implementations.put(type, provider);
-        return provider;
+                var superType = clazz.getSuperclass();
+                if (superType != null && !superType.equals(Object.class)) {
+                    accept(superType);
+                }
+                for (var interfaceType : clazz.getInterfaces()) {
+                    accept(interfaceType);
+                }
+            }
+        };
+        typeConsumer.accept(type);
+        return child;
     }
 
     public <T> T instance(Class<T> clazz) {
-        var provider = objectProvider(new QualifiedType<>(clazz, Set.of()));
+        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
         return provider.create();
     }
 
     public <T> Provider<T> provider(Class<T> clazz) {
-        var provider = objectProvider(new QualifiedType<>(clazz, Set.of()));
+        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
         return provider.createProvider();
+    }
+
+    public <T> Lazy<T> lazy(Class<T> clazz) {
+        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
+        return provider.createLazy();
+    }
+
+    public <T> T instance(Class<T> clazz, Object... args) {
+        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
+        return provider.create(args);
+    }
+
+    public <T> Provider<T> provider(Class<T> clazz, Object... args) {
+        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
+        return provider.createProvider(args);
+    }
+
+    public <T> Lazy<T> lazy(Class<T> clazz, Object... args) {
+        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
+        return provider.createLazy(args);
     }
 
     public static ObjectFactory create() {

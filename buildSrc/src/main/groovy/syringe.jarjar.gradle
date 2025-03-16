@@ -1,0 +1,100 @@
+import groovy.json.JsonBuilder
+import groovy.transform.CompileStatic
+
+import javax.inject.Inject
+
+abstract class JarToBundle {
+    @InputFile
+    abstract RegularFileProperty getJarFile();
+
+    @Input
+    abstract Property<String> getGroup()
+
+    @Input
+    abstract Property<String> getName()
+
+    @Input
+    abstract Property<String> getVersion()
+}
+
+@CompileStatic
+abstract class FileSetTransformer implements Transformer<List<JarToBundle>, Set<ResolvedArtifactResult>> {
+    @Inject FileSetTransformer() {}
+
+    @Inject
+    protected abstract ObjectFactory getObjectFactory()
+
+    @Override
+    List<JarToBundle> transform(Set<ResolvedArtifactResult> resolvedArtifactResults) {
+        return resolvedArtifactResults.<JarToBundle, ResolvedArtifactResult>collectMany { it ->
+            if (it.variant.capabilities.empty) {
+                return []
+            }
+            var jarToBundle = objectFactory.newInstance(JarToBundle)
+            jarToBundle.jarFile.set(it.file)
+            var capability = it.variant.capabilities.first
+            jarToBundle.group.set(capability.group)
+            jarToBundle.name.set(capability.name)
+            jarToBundle.version.set(capability.version)
+            [jarToBundle]
+        }
+    }
+}
+
+@CompileStatic
+abstract class JarJarTask extends DefaultTask {
+    @Inject
+    protected abstract ObjectFactory getObjectFactory()
+
+    @Inject
+    JarJarTask() {
+        outputDirectory.convention(project.layout.buildDirectory.dir('jarJar/'+name))
+    }
+
+    @Nested
+    abstract ListProperty<JarToBundle> getJars()
+
+    void from(Configuration configuration) {
+        Provider<List<JarToBundle>> jarsToBundle = configuration.incoming.artifacts.resolvedArtifacts.map(objectFactory.newInstance(FileSetTransformer))
+        jars.addAll(jarsToBundle)
+        this.dependsOn(configuration)
+    }
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDirectory()
+
+    @Inject
+    protected abstract FileSystemOperations getFileSystemOperations()
+
+    @TaskAction
+    void run() {
+        fileSystemOperations.delete {
+            it.delete(outputDirectory.get())
+        }
+        var jarJarJars = []
+        jars.get().each {
+            fileSystemOperations.copy { spec ->
+                spec.from it.jarFile.get()
+                spec.into outputDirectory.get().dir('META-INF/jarjar')
+                spec.rename { _ -> "${it.name.get()}-${it.version.get()}.jar" }
+            }
+
+            jarJarJars << [
+                'identifier': ['group':it.group.get(), 'artifact':it.name.get()],
+                'version': ['range':"[${it.version.get()},)", 'artifactVersion':it.version.get()],
+                'path': "META-INF/jarjar/${it.name.get()}-${it.version.get()}.jar",
+                'isObfuscated': false
+            ]
+        }
+        if (!jarJarJars.empty) {
+            outputDirectory.get().dir('META-INF/jarjar').file('metadata.json').asFile.write(new JsonBuilder([
+                'jars': jarJarJars
+            ]).toPrettyString(), 'UTF-8')
+        }
+    }
+}
+
+tasks.withType(Jar) {
+    var jarJarTask = tasks.register(name+'Jar', JarJarTask)
+    from(jarJarTask.flatMap { it.outputDirectory })
+}

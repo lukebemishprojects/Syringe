@@ -3,7 +3,6 @@ package dev.lukebemish.syringe.test;
 import dev.lukebemish.syringe.Binds;
 import dev.lukebemish.syringe.Component;
 import dev.lukebemish.syringe.ObjectFactory;
-import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import junit.framework.Test;
 import org.atinject.tck.Tck;
@@ -19,15 +18,14 @@ import org.atinject.tck.auto.accessories.SpareTire;
 
 public class TestTCK {
     public static Test suite() {
-        var component = ObjectFactory.create().instance(TckComponent.class);
-        Car tckCar = component.getObjectFactory().instance(Car.class);
+        var root = ObjectFactory.create();
+        var component = root.instance(TckComponent.class);
+        Car tckCar = root.within(component).instance(Car.class);
         return Tck.testsFor(tckCar, false, true);
     }
 
     @Component
     public static abstract class TckComponent {
-        protected abstract @Inject ObjectFactory getObjectFactory();
-
         protected abstract @Binds Car makeCar(Convertible car);
 
         protected abstract @Binds @Drivers Seat makeSeat(DriversSeat seat);

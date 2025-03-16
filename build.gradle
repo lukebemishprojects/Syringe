@@ -1,15 +1,36 @@
 plugins {
     id 'java-library'
+    id 'syringe.jarjar'
 }
 
 group = 'dev.lukebemish'
 // TODO: managed versioning
 version = '0.1.0'
 
+sourceSets {
+    fml {}
+    fmlattachment {}
+}
+
 java {
     withSourcesJar()
     withJavadocJar()
     toolchain.languageVersion.set JavaLanguageVersion.of(21)
+    registerFeature('fml') {
+        usingSourceSet(sourceSets.fml)
+    }
+    registerFeature('fmlattachment') {
+        usingSourceSet(sourceSets."fmlattachment")
+        disablePublication()
+    }
+}
+
+configurations {
+    dependencyScope('fmlJarJar')
+    resolvable('fmlJarJarClasspath') {
+        extendsFrom configurations.fmlJarJar
+        transitive = false
+    }
 }
 
 dependencies {
@@ -27,6 +48,55 @@ dependencies {
     testCompileOnly libs.junit.junit
     testRuntimeOnly libs.junit.vintage.engine
     testRuntimeOnly libs.junit.platform.launcher
+
+    fmlCompileOnly cLibs.bundles.compileonly
+    fmlAnnotationProcessor cLibs.bundles.annotationprocessor
+    fmlattachmentCompileOnly cLibs.bundles.compileonly
+    fmlattachmentAnnotationProcessor cLibs.bundles.annotationprocessor
+    fmlattachmentImplementation libs.fml
+
+    fmlImplementation libs.fml
+    fmlApi project(':')
+    fmlJarJar(project(':')) {
+        capabilities {
+            requireFeature('fmlattachment')
+        }
+    }
+    fmlJarJar libs.jakarta.inject.api
+}
+
+tasks.named('jar', Jar) {
+    manifest {
+        attributes (
+            'FMLModType': 'LIBRARY',
+            'Implementation-Version': project.version as String,
+            'Automatic-Module-Name': 'dev.lukebemish.syringe'
+        )
+    }
+}
+
+tasks.named('fmlJar', Jar) {
+    manifest {
+        attributes (
+            'FMLModType': 'LIBRARY',
+            'Implementation-Version': project.version as String,
+            'Automatic-Module-Name': 'dev.lukebemish.syringe.fml'
+        )
+    }
+}
+
+tasks.named('fmlJarJar', JarJarTask) {
+    from(configurations.fmlJarJarClasspath)
+}
+
+tasks.named('fmlattachmentJar', Jar) {
+    manifest {
+        attributes (
+            'FMLModType': 'GAMELIBRARY',
+            'Implementation-Version': project.version as String,
+            'Automatic-Module-Name': 'dev.lukebemish.syringe.fml.attachment'
+        )
+    }
 }
 
 test {

@@ -2,7 +2,7 @@ package dev.lukebemish.syringe;
 
 import java.util.function.Supplier;
 
-class Memoize<T> implements Supplier<T> {
+final class Memoize<T> implements Lazy<T> {
     private Supplier<T> supplier;
     private boolean initialized = false;
     private boolean initializing = false;
