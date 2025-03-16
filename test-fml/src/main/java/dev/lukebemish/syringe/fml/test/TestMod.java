@@ -4,6 +4,7 @@ import dev.lukebemish.syringe.Assisted;
 import dev.lukebemish.syringe.ObjectFactory;
 import dev.lukebemish.syringe.Provides;
 import dev.lukebemish.syringe.fml.Game;
+import dev.lukebemish.syringe.fml.ModScope;
 import jakarta.inject.Inject;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -37,6 +38,13 @@ public abstract class TestMod {
             throw new IllegalStateException("InnerThingy name is not 'innerThingy'");
         }
 
+        var scopedService = objectFactory().instance(ScopedService.class);
+        var scopedService2 = objectFactory().instance(ScopedService.class);
+        Objects.requireNonNull(scopedService);
+        if (scopedService != scopedService2) {
+            throw new IllegalStateException("Scoped service instances are not the same, despite it being mod-scoped");
+        }
+
         modBus().register(innerThingy);
 
         gameBus().register(objectFactory().instance(GameBusListeners.class));
@@ -44,6 +52,7 @@ public abstract class TestMod {
         System.out.println("Syringe test mod successfully loaded");
     }
 
+    @ModScope
     public interface ScopedService {
         String name();
 
