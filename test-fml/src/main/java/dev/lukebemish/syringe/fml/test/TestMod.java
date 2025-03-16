@@ -104,18 +104,15 @@ public abstract class TestMod {
         }
 
         @Inject
-        protected abstract TestMod testMod();
-
-        @Inject
-        protected abstract TestMod getModInstance();
+        protected abstract TestMod modInstance();
 
         @SubscribeEvent
         public void commonSetup(FMLCommonSetupEvent event) {
-            if (testMod() != toCheck) {
+            Objects.requireNonNull(modInstance());
+            if (modInstance() != toCheck) {
                 throw new IllegalStateException("@Mod instance not properly scoped");
             }
 
-            Objects.requireNonNull(getModInstance());
             System.out.println("InnerThingy common setup event");
         }
     }
