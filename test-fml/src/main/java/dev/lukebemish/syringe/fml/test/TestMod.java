@@ -4,17 +4,17 @@ import dev.lukebemish.syringe.Assisted;
 import dev.lukebemish.syringe.ObjectFactory;
 import dev.lukebemish.syringe.Provides;
 import dev.lukebemish.syringe.fml.Game;
-import dev.lukebemish.syringe.fml.SyringeMod;
 import jakarta.inject.Inject;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
 
 import java.util.Objects;
 
-@SyringeMod("syringe_testmod")
+@Mod("syringe_testmod")
 public abstract class TestMod {
     @Inject
     protected abstract IEventBus modBus();
@@ -31,7 +31,7 @@ public abstract class TestMod {
         Objects.requireNonNull(modBus());
         Objects.requireNonNull(objectFactory());
 
-        var innerThingy = objectFactory().instance(InnerThingy.class, "innerThingy");
+        var innerThingy = objectFactory().instance(InnerThingy.class, "innerThingy", this);
         Objects.requireNonNull(innerThingy);
         if (!innerThingy.name.equals("innerThingy")) {
             throw new IllegalStateException("InnerThingy name is not 'innerThingy'");
@@ -85,6 +85,7 @@ public abstract class TestMod {
 
     public abstract static class InnerThingy {
         private final String name;
+        private final TestMod toCheck;
 
         @Inject
         protected abstract IEventBus bus();
@@ -93,19 +94,27 @@ public abstract class TestMod {
         protected abstract ScopedService scopedService();
 
         @Inject
-        public InnerThingy(@Assisted String name, ObjectFactory factory) {
+        public InnerThingy(@Assisted String name, @Assisted TestMod toCheck, ObjectFactory factory) {
             Objects.requireNonNull(factory);
             Objects.requireNonNull(bus());
             Objects.requireNonNull(scopedService());
             Objects.requireNonNull(name);
             this.name = name;
+            this.toCheck = toCheck;
         }
+
+        @Inject
+        protected abstract TestMod testMod();
 
         @Inject
         protected abstract TestMod getModInstance();
 
         @SubscribeEvent
         public void commonSetup(FMLCommonSetupEvent event) {
+            if (testMod() != toCheck) {
+                throw new IllegalStateException("@Mod instance not properly scoped");
+            }
+
             Objects.requireNonNull(getModInstance());
             System.out.println("InnerThingy common setup event");
         }

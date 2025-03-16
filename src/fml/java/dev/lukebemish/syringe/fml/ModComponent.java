@@ -8,6 +8,7 @@ import jakarta.inject.Inject;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.neoforgespi.language.IModInfo;
 
@@ -15,7 +16,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.Objects;
 
-@Component(scopes = {ModScope.class, SyringeMod.class})
+@Component(scopes = {ModScope.class, Mod.class})
 final class ModComponent {
     private static final String ATTACHMENT_MODULE = "dev.lukebemish.syringe.fml.attachment";
     private static final String ATTACHMENT_TARGET_NAME = "dev.lukebemish.syringe.fml.attachment.AttachmentTarget";
