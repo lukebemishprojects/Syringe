@@ -24,8 +24,7 @@ public class SyringeLanguageLoader implements IModLanguageLoader {
 
     @Override
     public String version() {
-        // TODO
-        return "0.1.0";
+        return SyringeLanguageLoader.class.getPackage().getImplementationVersion();
     }
 
     @Override

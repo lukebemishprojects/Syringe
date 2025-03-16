@@ -1,8 +1,6 @@
 package dev.lukebemish.syringe.fml.test;
 
 import dev.lukebemish.syringe.Assisted;
-import dev.lukebemish.syringe.Component;
-import dev.lukebemish.syringe.Lazy;
 import dev.lukebemish.syringe.ObjectFactory;
 import dev.lukebemish.syringe.Provides;
 import dev.lukebemish.syringe.fml.Game;
@@ -17,7 +15,6 @@ import net.neoforged.neoforge.event.GameShuttingDownEvent;
 import java.util.Objects;
 
 @SyringeMod("syringe_testmod")
-@Component
 public abstract class TestMod {
     @Inject
     protected abstract IEventBus modBus();
@@ -34,11 +31,7 @@ public abstract class TestMod {
         Objects.requireNonNull(modBus());
         Objects.requireNonNull(objectFactory());
 
-        scopedService = objectFactory().lazy(ScopedServiceImpl.class, "scopedService");
-
-        var scopedFactory = objectFactory().within(this);
-
-        var innerThingy = scopedFactory.instance(InnerThingy.class, "innerThingy");
+        var innerThingy = objectFactory().instance(InnerThingy.class, "innerThingy");
         Objects.requireNonNull(innerThingy);
         if (!innerThingy.name.equals("innerThingy")) {
             throw new IllegalStateException("InnerThingy name is not 'innerThingy'");
@@ -46,20 +39,18 @@ public abstract class TestMod {
 
         modBus().register(innerThingy);
 
-        gameBus().register(scopedFactory.instance(GameBusListeners.class));
+        gameBus().register(objectFactory().instance(GameBusListeners.class));
 
         System.out.println("Syringe test mod successfully loaded");
     }
 
-    private final Lazy<? extends ScopedService> scopedService;
-
-    @Provides
-    protected ScopedService provideScopedService() {
-        return scopedService.get();
-    }
-
     public interface ScopedService {
         String name();
+
+        @Provides
+        static ScopedService provideScopedService(ObjectFactory factory) {
+            return factory.instance(ScopedServiceImpl.class, "scopedService");
+        }
     }
 
     public abstract static class ScopedServiceImpl implements ScopedService {

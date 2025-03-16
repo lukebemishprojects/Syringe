@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -247,34 +248,34 @@ public final class ObjectFactory {
         return child;
     }
 
+    private final Map<Class<?>, ObjectProvider<?>> directClassBindings = new IdentityHashMap<>();
+    @SuppressWarnings("unchecked")
+    private <T> ObjectProvider<T> direct(Class<T> clazz) {
+        return (ObjectProvider<T>) directClassBindings.computeIfAbsent(clazz, c -> findOrMakeProvider(new QualifiedType<>(clazz, Set.of())));
+    }
+
     public <T> T instance(Class<T> clazz) {
-        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
-        return provider.create();
+        return direct(clazz).create();
     }
 
     public <T> Provider<T> provider(Class<T> clazz) {
-        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
-        return provider.createProvider();
+        return direct(clazz).createProvider();
     }
 
     public <T> Lazy<T> lazy(Class<T> clazz) {
-        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
-        return provider.createLazy();
+        return direct(clazz).createLazy();
     }
 
     public <T> T instance(Class<T> clazz, Object... args) {
-        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
-        return provider.create(args);
+        return direct(clazz).create(args);
     }
 
     public <T> Provider<T> provider(Class<T> clazz, Object... args) {
-        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
-        return provider.createProvider(args);
+        return direct(clazz).createProvider(args);
     }
 
     public <T> Lazy<T> lazy(Class<T> clazz, Object... args) {
-        var provider = findOrMakeProvider(new QualifiedType<>(clazz, Set.of()));
-        return provider.createLazy(args);
+        return direct(clazz).createLazy(args);
     }
 
     public static ObjectFactory create() {
