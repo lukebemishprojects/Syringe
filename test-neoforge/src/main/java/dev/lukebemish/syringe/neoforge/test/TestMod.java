@@ -4,7 +4,7 @@ import dev.lukebemish.syringe.Assisted;
 import dev.lukebemish.syringe.ObjectFactory;
 import dev.lukebemish.syringe.Provides;
 import dev.lukebemish.syringe.neoforge.BusType;
-import dev.lukebemish.syringe.neoforge.ModScope;
+import dev.lukebemish.syringe.common.ModScope;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import net.minecraft.core.registries.BuiltInRegistries;

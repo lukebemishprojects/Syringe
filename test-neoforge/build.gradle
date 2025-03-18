@@ -35,4 +35,10 @@ dependencies {
             requireFeature('neoforge')
         }
     }
+
+    compileOnly(project(':')) {
+        capabilities {
+            requireFeature('common')
+        }
+    }
 }

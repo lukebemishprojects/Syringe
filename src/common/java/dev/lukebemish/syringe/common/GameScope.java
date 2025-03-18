@@ -1,4 +1,4 @@
-package dev.lukebemish.syringe.neoforge;
+package dev.lukebemish.syringe.common;
 
 import jakarta.inject.Scope;
 

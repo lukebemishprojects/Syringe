@@ -8,6 +8,10 @@ pluginManagement {
             name = "neoforged"
             url = "https://maven.neoforged.net/releases/"
         }
+        maven {
+            name = "fabricmc"
+            url = "https://maven.fabricmc.net/"
+        }
     }
 }
 
@@ -15,6 +19,7 @@ plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
     id 'dev.lukebemish.conventions' version '0.1.11'
     id 'net.neoforged.moddev.repositories' version '2.0.78'
+    id 'fabric-loom' version '1.10.4'
 }
 
 dependencyResolutionManagement {
@@ -37,3 +42,4 @@ project(':syringe-neoforge-attachment').projectDir = file('neoforge-attachment')
 project(':syringe-fabric-attachment').projectDir = file('fabric-attachment')
 
 include(':test-neoforge')
+include(':test-fabric')

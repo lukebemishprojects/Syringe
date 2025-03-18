@@ -9,6 +9,8 @@ version = '0.1.0'
 
 sourceSets {
     neoforge {}
+    fabric {}
+    common {}
 }
 
 java {
@@ -18,6 +20,13 @@ java {
     registerFeature('neoforge') {
         usingSourceSet(sourceSets.neoforge)
     }
+    registerFeature('fabric') {
+        usingSourceSet(sourceSets.fabric)
+    }
+    registerFeature('common') {
+        usingSourceSet(sourceSets.common)
+        disablePublication()
+    }
 }
 
 configurations {
@@ -25,6 +34,11 @@ configurations {
     resolvable('neoforgeJarJarClasspath') {
         extendsFrom configurations.neoforgeJarJar
         transitive = false
+    }
+
+    dependencyScope('fabricBundle')
+    resolvable('fabricBundleClasspath') {
+        extendsFrom configurations.fabricBundle
     }
 }
 
@@ -44,13 +58,28 @@ dependencies {
     testRuntimeOnly libs.junit.vintage.engine
     testRuntimeOnly libs.junit.platform.launcher
 
+    commonCompileOnly cLibs.bundles.compileonly
+    commonAnnotationProcessor cLibs.bundles.annotationprocessor
+
+    commonApi project(':')
+
     neoforgeCompileOnly cLibs.bundles.compileonly
     neoforgeAnnotationProcessor cLibs.bundles.annotationprocessor
 
     neoforgeImplementation libs.fml
     neoforgeApi project(':')
+
     neoforgeJarJar project(':syringe-neoforge-attachment')
+    neoforgeJarJar project(':')
     neoforgeJarJar libs.jakarta.inject.api
+
+    fabricCompileOnly cLibs.bundles.compileonly
+    fabricAnnotationProcessor cLibs.bundles.annotationprocessor
+    // We shadow the attachment mod instead of jar-in-jaring it, to avoid dealing with loom's issues with stripping nested jars
+
+    fabricImplementation libs.fabric.loader
+    fabricApi project(':')
+    fabricBundle project(':syringe-fabric-attachment')
 }
 
 tasks.named('jar', Jar) {
@@ -64,11 +93,30 @@ tasks.named('jar', Jar) {
 }
 
 tasks.named('neoforgeJar', Jar) {
+    from sourceSets.common.output
     manifest {
         attributes (
             'FMLModType': 'LIBRARY',
             'Implementation-Version': project.version as String,
             'Automatic-Module-Name': 'dev.lukebemish.syringe.neoforge'
+        )
+    }
+}
+
+tasks.register('fabricPrepareBundle', UnzipAllTask) {
+    inputArchives.from configurations.fabricBundleClasspath
+}
+
+tasks.named('fabricJar', Jar) {
+    from(tasks.fabricPrepareBundle.outputDirectory) {
+        exclude('META-INF/MANIFEST.MF')
+    }
+    from sourceSets.common.output
+    manifest {
+        from tasks.fabricPrepareBundle.outputDirectory.file('META-INF/MANIFEST.MF')
+        attributes (
+            'Implementation-Version': project.version as String,
+            'Automatic-Module-Name': 'dev.lukebemish.syringe.fabric'
         )
     }
 }

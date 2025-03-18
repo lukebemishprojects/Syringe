@@ -7,6 +7,8 @@ junit = "4.13.2"
 asm = "9.5"
 fml = "6.0.11"
 neoforge = "21.4.111-beta"
+fabric_loader = "0.16.10"
+minecraft = "1.21.4"
 
 [libraries]
 
@@ -21,3 +23,6 @@ junit_junit = { module = "junit:junit", version.ref = "junit" }
 asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
 
 fml = { module = "net.neoforged.fancymodloader:loader", version.ref = "fml" }
+
+fabric_loader = { module = "net.fabricmc:fabric-loader", version.ref = "fabric_loader" }
+minecraft = { module = "com.mojang:minecraft", version.ref = "minecraft" }

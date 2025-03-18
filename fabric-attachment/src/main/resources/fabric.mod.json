@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "dev_lukebemish_syringe-fabric",
+  "version": "${version}",
+  "name": "Syringe Fabric Attachment",
+  "description": "Attachment point for syringe's fabric compat",
+  "authors": [
+    "Luke Bemish"
+  ],
+  "contact": {
+    "homepage": "https://github.com/lukebemishprojects/Syringe",
+    "sources": "https://github.com/lukebemishprojects/Syringe"
+  },
+  "license": "LGPL-3.0-or-later",
+  "environment": "*",
+  "entrypoints": {},
+  "languageAdapters": {
+    "syringe": "dev.lukebemish.syringe.fabric.SyringeLanguageAdapter"
+  },
+  "depends": {
+    "fabricloader": ">=${fabricLoaderVersion}",
+    "minecraft": ">=${minecraftVersion}"
+  }
+}

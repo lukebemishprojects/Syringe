@@ -1,0 +1,40 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'fabric-loom'
+}
+
+group = 'dev.lukebemish'
+// TODO: managed versioning
+version = '0.1.0'
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+dependencies {
+    compileOnly cLibs.bundles.compileonly
+    annotationProcessor cLibs.bundles.annotationprocessor
+
+    implementation(project(':')) {
+        capabilities {
+            requireFeature('fabric')
+        }
+    }
+
+    compileOnly(project(':')) {
+        capabilities {
+            requireFeature('common')
+        }
+    }
+
+    minecraft libs.minecraft
+    mappings loom.officialMojangMappings()
+
+    modCompileOnly libs.fabric.loader
+}
+
+loom {
+    runs {
+        client {}
+        server {}
+    }
+}

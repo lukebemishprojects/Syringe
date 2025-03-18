@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "syringe_testmod",
+  "version": "1.0.0",
+  "name": "Syringe Test Mod",
+  "description": "A test mod for Syringe",
+  "license": "LGPL-3.0-or-later",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      {
+        "adapter": "syringe",
+        "value": "dev.lukebemish.syringe.fabric.test.TestModInitializer"
+      }
+    ]
+  }
+}

@@ -5,8 +5,8 @@ license="LGPL-3.0-or-later"
 [[mods]]
 modId="dev.lukebemish.syringe.neoforge.attachment"
 version="${version}"
-displayName="Syringe Neoforge Attachment"
-description="Game-Layer Attachment Point for Syringe's Neoforge Compat"
+displayName="Syringe NeoForge Attachment"
+description="Game-layer attachment point for syringe's neoforge compat"
 authors="Luke Bemish"
 
 [[dependencies."dev.lukebemish.syringe.neoforge.attachment"]]

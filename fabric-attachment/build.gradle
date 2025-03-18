@@ -1,6 +1,6 @@
 plugins {
     id 'java-library'
-    id 'net.neoforged.moddev'
+    id 'fabric-loom'
 }
 
 group = 'dev.lukebemish'
@@ -9,45 +9,40 @@ version = '0.1.0'
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
-neoForge {
-    // Specify the version of NeoForge to use.
-    version = libs.versions.neoforge.get()
-}
-
 dependencies {
     compileOnly cLibs.bundles.compileonly
     annotationProcessor cLibs.bundles.annotationprocessor
 
     compileOnly(project(':')) {
         capabilities {
-            requireFeature('neoforge')
+            requireFeature('common')
         }
     }
 
     compileOnly(project(':')) {
         capabilities {
-            requireFeature('common')
+            requireFeature('fabric')
         }
     }
+
+    minecraft libs.minecraft
+    mappings loom.officialMojangMappings()
+
+    modCompileOnly libs.fabric.loader
+
+    include project(':')
+    include libs.jakarta.inject.api
 }
 
 tasks.named('processResources', ProcessResources) {
     var replaceProperties = [
-        neoforgeVersion: libs.versions.neoforge.get(),
+        fabricLoaderVersion: libs.versions.fabric.loader.get(),
+        minecraftVersion: libs.versions.minecraft.get(),
         version: version as String
     ]
     inputs.properties replaceProperties
 
-    filesMatching(['META-INF/neoforge.mods.toml']) {
+    filesMatching(['fabric.mod.json']) {
         expand replaceProperties
-    }
-}
-
-tasks.named('jar', Jar) {
-    manifest {
-        attributes (
-            'Implementation-Version': project.version as String,
-            'Automatic-Module-Name': 'dev.lukebemish.syringe.neoforge.attachment'
-        )
     }
 }

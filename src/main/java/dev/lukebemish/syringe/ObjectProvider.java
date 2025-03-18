@@ -594,7 +594,7 @@ sealed abstract class ObjectProvider<T> {
 
         // Vc... -> T
         MethodHandle handle;
-        if (!bindings.isEmpty() || !getterInjections.isEmpty()) {
+        if (!bindings.isEmpty() || !getterInjections.isEmpty() || (type.type().accessFlags().contains(AccessFlag.ABSTRACT) && provider == null)) {
             for (var getter : getterInjections) {
                 handleTypes.add(new SpecificQualifiedType<>(getter.type(), switch (getter.specific()) {
                     case PROVIDER -> SpecificType.PROVIDER;

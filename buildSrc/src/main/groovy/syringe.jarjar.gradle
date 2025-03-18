@@ -42,6 +42,36 @@ abstract class FileSetTransformer implements Transformer<List<JarToBundle>, Set<
 }
 
 @CompileStatic
+abstract class UnzipAllTask extends DefaultTask {
+    @Inject
+    protected abstract ArchiveOperations getArchiveOperations()
+
+    @Inject
+    protected abstract FileSystemOperations getFileSystemOperations()
+
+    @InputFiles
+    protected abstract ConfigurableFileCollection getInputArchives()
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDirectory()
+
+    @Inject
+    UnzipAllTask() {
+        outputDirectory.convention(project.layout.buildDirectory.dir('unzipAll/'+name))
+    }
+
+    @TaskAction
+    void run() {
+        inputArchives.each { file ->
+            fileSystemOperations.copy {
+                it.from archiveOperations.zipTree(file)
+                it.into outputDirectory.get()
+            }
+        }
+    }
+}
+
+@CompileStatic
 abstract class JarJarTask extends DefaultTask {
     @Inject
     protected abstract ObjectFactory getObjectFactory()
