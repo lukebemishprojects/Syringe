@@ -10,6 +10,4 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 @Documented
 @Retention(RUNTIME)
 @Target(ElementType.PARAMETER)
-public @interface Dynamic {
-    // TODO: implement. This is used in providers and allows them to accept a qualifier annotation.
-}
+public @interface Dynamic {}

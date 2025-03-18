@@ -1,25 +1,29 @@
 package dev.lukebemish.syringe.neoforge.attachment;
 
 import com.google.common.base.Suppliers;
-import dev.lukebemish.syringe.Assisted;
 import dev.lukebemish.syringe.Binds;
 import dev.lukebemish.syringe.Component;
+import dev.lukebemish.syringe.Dynamic;
 import dev.lukebemish.syringe.ObjectFactory;
 import dev.lukebemish.syringe.Provides;
 import dev.lukebemish.syringe.neoforge.BusType;
+import dev.lukebemish.syringe.neoforge.GameScope;
 import dev.lukebemish.syringe.neoforge.ModScope;
 import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import net.minecraft.resources.ResourceLocation;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforgespi.language.IModInfo;
 
 import java.util.Objects;
 import java.util.function.Supplier;
 
-//@GameScope
+@GameScope
 @Component(scopes = {ModScope.class, Mod.class})
 public abstract class ModComponent {
     private final String modId;
@@ -34,10 +38,9 @@ public abstract class ModComponent {
     });
 
     @Inject
-    public ModComponent(@Assisted String modId, ObjectFactory parentFactory) {
-        this.modId = modId;
-        this.factory = parentFactory.within(this);;
-
+    public ModComponent(@Dynamic Named modId, ObjectFactory parentFactory) {
+        this.modId = modId.value();
+        this.factory = parentFactory.within(this);
     }
 
     @Provides @ModScope
@@ -60,5 +63,13 @@ public abstract class ModComponent {
 
     public ObjectFactory scopedObjectFactory() {
         return factory;
+    }
+
+    @Provides @ModScope
+    public <T> DeferredRegister<T> deferredRegister(@Dynamic Named registryName) {
+        var rl = ResourceLocation.parse(registryName.value());
+        var register = DeferredRegister.<T>create(rl, modId);
+        register.register(modBus());
+        return register;
     }
 }

@@ -1,13 +1,16 @@
 package dev.lukebemish.syringe.neoforge;
 
 import dev.lukebemish.syringe.ObjectFactory;
+import jakarta.inject.Named;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.loading.FMLLoader;
 
+import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.util.List;
 import java.util.function.UnaryOperator;
 
 final class ModComponentBuilder {
@@ -50,8 +53,34 @@ final class ModComponentBuilder {
 
     static ObjectFactory handleFor(ModContainer container, ObjectFactory root) {
         try {
+            var modId = container.getModId();
             var gameFactory = (ObjectFactory) GAME_COMPONENT_OBJECT_FACTORY.invoke(root.instance(GAME_COMPONENT));
-            return (ObjectFactory) MOD_COMPONENT_OBJECT_FACTORY.invoke(gameFactory.instance(MOD_COMPONENT, container.getModId()));
+            return (ObjectFactory) MOD_COMPONENT_OBJECT_FACTORY.invoke(gameFactory.instance(List.of(new Named() {
+                @Override
+                public Class<? extends Annotation> annotationType() {
+                    return Named.class;
+                }
+
+                @Override
+                public String value() {
+                    return modId;
+                }
+
+                @Override
+                public boolean equals(Object obj) {
+                    return obj instanceof Named named && named.value().equals(modId);
+                }
+
+                @Override
+                public int hashCode() {
+                    return (127 * "value".hashCode()) ^ modId.hashCode();
+                }
+
+                @Override
+                public String toString() {
+                    return "@" + Named.class.getName() + "(value=" + modId + ")";
+                }
+            }), MOD_COMPONENT));
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }

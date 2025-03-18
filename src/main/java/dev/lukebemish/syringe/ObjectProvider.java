@@ -25,13 +25,16 @@ import java.lang.reflect.ParameterizedType;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 sealed abstract class ObjectProvider<T> {
     abstract T create(Object[] args);
@@ -156,9 +159,26 @@ sealed abstract class ObjectProvider<T> {
     }
 
     record Creator<T>(QualifiedType<?> target, Function<Instantiator, MethodHandle> handle, List<InjectedParameterType> parameters) {
-        ObjectProvider<T> bind(ObjectFactory factory, Instantiator instantiator, boolean singleton) {
+        boolean isDynamic() {
+            return parameters.stream().anyMatch(p -> p instanceof DynamicQualifierType);
+        }
+
+        Set<Class<? extends Annotation>> dynamicQualifiers() {
+            return parameters.stream().filter(p -> p instanceof DynamicQualifierType).map(p -> ((DynamicQualifierType) p).type()).collect(Collectors.toSet());
+        }
+
+        ObjectProvider<T> bind(ObjectFactory factory, Instantiator instantiator, boolean singleton, Collection<Annotation> annotations) {
             return new MemoizeObjectProvider<>(() -> {
                 List<@Nullable MethodHandle> parameterSuppliers = new ArrayList<>();
+                Supplier<Map<Class<? extends Annotation>, Annotation>> lazyQualifierMap = new Memoize<>(() -> {
+                    var map = new HashMap<Class<? extends Annotation>, Annotation>();
+                    for (var annotation : annotations) {
+                        if (map.put(annotation.annotationType(), annotation) != null) {
+                            throw new IllegalArgumentException("Duplicate qualifier of type" + annotation.annotationType());
+                        }
+                    }
+                    return map;
+                });
                 for (var parameter : parameters) {
                     switch (parameter) {
                         case ObjectProvider.AssistedParameterType ignored -> parameterSuppliers.add(null);
@@ -173,6 +193,13 @@ sealed abstract class ObjectProvider<T> {
                                     parameterSuppliers.add(handle);
                                 }
                             }
+                        }
+                        case ObjectProvider.DynamicQualifierType dynamicQualifierType -> {
+                            var value = lazyQualifierMap.get().get(dynamicQualifierType.type());
+                            if (value == null) {
+                                throw new IllegalArgumentException("No qualifier of type " + dynamicQualifierType.type());
+                            }
+                            parameterSuppliers.add(MethodHandles.constant(dynamicQualifierType.type(), value));
                         }
                     }
                 }
@@ -282,6 +309,7 @@ sealed abstract class ObjectProvider<T> {
 
     record SpecificQualifiedType<T>(QualifiedType<T> type, SpecificType specific) implements InjectedParameterType {}
     record AssistedParameterType(Class<?> type) implements InjectedParameterType {}
+    record DynamicQualifierType(Class<? extends Annotation> type) implements InjectedParameterType {}
 
     sealed interface Injection {
         Collection<InjectedParameterType> types();
@@ -300,6 +328,7 @@ sealed abstract class ObjectProvider<T> {
 
     record CtorInjectionParameter<T>(QualifiedType<T> type, SpecificType specific) implements CtorInjectionParameterType<T> {}
     record CtorAssistedParameter<T>(Class<?> type) implements CtorInjectionParameterType<T> {}
+    record CtorDynamicQualifierParameter(Class<? extends Annotation> type) implements CtorInjectionParameterType<Annotation> {}
 
     sealed interface CtorLikeInjection extends Injection {
         List<CtorInjectionParameterType<?>> injections();
@@ -311,6 +340,7 @@ sealed abstract class ObjectProvider<T> {
                 list.add(switch (parameter) {
                     case ObjectProvider.CtorAssistedParameter<?> v -> new AssistedParameterType(v.type());
                     case ObjectProvider.CtorInjectionParameter<?> v -> new SpecificQualifiedType<>(v.type(), v.specific());
+                    case ObjectProvider.CtorDynamicQualifierParameter v -> new DynamicQualifierType(v.type());
                 });
             }
             return list;
@@ -352,25 +382,47 @@ sealed abstract class ObjectProvider<T> {
         return Set.copyOf(set);
     }
 
-    static <T> Creator<T> creatorForType(Class<T> type, Instantiator instantiator) {
+    private static boolean supportsQualifiers(Set<Annotation> qualifiers, Parameter[] parameters, AnnotatedElement element) {
+        var dynamicQualifiers = new HashSet<Class<? extends Annotation>>();
+        for (var parameter : parameters) {
+            if (parameter.isAnnotationPresent(Dynamic.class) && Annotation.class.isAssignableFrom(parameter.getType())) {
+                @SuppressWarnings("unchecked") Class<? extends Annotation> clazz = (Class<? extends Annotation>) parameter.getType();
+                dynamicQualifiers.add(clazz);
+            }
+        }
+        for (var qualifier : qualifiers) {
+            if (qualifier.equals(element.getAnnotation(qualifier.annotationType()))) {
+                continue;
+            }
+            if (!dynamicQualifiers.contains(qualifier.annotationType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static <T> Creator<T> creatorForType(QualifiedType<T> type, Instantiator instantiator) {
         // We need to locate (a) @Inject fields, (b) @Inject constructors, (c) @Inject getter methods (that is abstract methods that return a type), and (d) @Inject setter methods (concrete methods that take types)
 
         // Cannot inject inner, local, anonymous, or hidden classes this way
-        if (type.isLocalClass()) {
+        if (type.type().isLocalClass()) {
             throw new IllegalArgumentException("Cannot inject local class " + type);
-        } else if (type.isAnonymousClass()) {
+        } else if (type.type().isAnonymousClass()) {
             throw new IllegalArgumentException("Cannot inject anonymous class " + type);
-        } else if (type.isHidden()) {
+        } else if (type.type().isHidden()) {
             throw new IllegalArgumentException("Cannot inject hidden class " + type);
-        } else if (type.isMemberClass() && !type.accessFlags().contains(AccessFlag.STATIC)) {
+        } else if (type.type().isMemberClass() && !type.type().accessFlags().contains(AccessFlag.STATIC)) {
             throw new IllegalArgumentException("Cannot inject inner class " + type);
         }
 
         // We find a constructor. If any _one_ ctor has @Inject, we use that one -- otherwise, we use the no-arg constructor
         // More than one @Inject-ed constructor, or no matching constructor, is an exception
         Constructor<?> ctor = null;
-        for (var constructor : type.getDeclaredConstructors()) {
+        for (var constructor : type.type().getDeclaredConstructors()) {
             if (constructor.isAnnotationPresent(Inject.class)) {
+                if (!supportsQualifiers(type.qualifiers(), constructor.getParameters(), constructor)) {
+                    continue;
+                }
                 if (ctor != null) {
                     throw new IllegalArgumentException("Multiple @Inject constructors for " + type);
                 }
@@ -378,9 +430,12 @@ sealed abstract class ObjectProvider<T> {
             }
         }
         Method provider = null;
-        for (var method : type.getDeclaredMethods()) {
-            if (method.accessFlags().contains(AccessFlag.STATIC) && method.getReturnType().equals(type)) {
+        for (var method : type.type().getDeclaredMethods()) {
+            if (method.accessFlags().contains(AccessFlag.STATIC) && method.getReturnType().equals(type.type())) {
                 if (method.isAnnotationPresent(Provides.class)) {
+                    if (!supportsQualifiers(type.qualifiers(), method.getParameters(), method)) {
+                        continue;
+                    }
                     if (provider != null) {
                         throw new IllegalArgumentException("Multiple static @Provides methods for " + type);
                     }
@@ -390,7 +445,10 @@ sealed abstract class ObjectProvider<T> {
         }
         if (ctor == null && provider == null) {
             try {
-                ctor = type.getDeclaredConstructor();
+                ctor = type.type().getDeclaredConstructor();
+                if (!supportsQualifiers(type.qualifiers(), ctor.getParameters(), ctor)) {
+                    throw new NoSuchMethodException("No matching no-arg constructor");
+                }
             } catch (NoSuchMethodException e) {
                 throw new IllegalArgumentException("No no-arg constructor or @Inject-marked constructor for " + type);
             }
@@ -406,6 +464,13 @@ sealed abstract class ObjectProvider<T> {
             if (parameter.isAnnotationPresent(Assisted.class)) {
                 ctorParameters.add(new CtorAssistedParameter<>(parameterType));
                 continue;
+            } else if (parameter.isAnnotationPresent(Dynamic.class)) {
+                if (!Annotation.class.isAssignableFrom(parameterType) || !parameterType.isAnnotationPresent(Qualifier.class)) {
+                    throw new IllegalArgumentException("@Dynamic parameter must be a @Qualifier annotation type");
+                }
+                @SuppressWarnings("unchecked") Class<? extends Annotation> clazz = (Class<? extends Annotation>) parameterType;
+                ctorParameters.add(new CtorDynamicQualifierParameter(clazz));
+                continue;
             }
             specificForType(parameterType, parameter.getParameterizedType(), parameter, (specific, clazzType) -> {
                 ctorParameters.add(new CtorInjectionParameter<>(new QualifiedType<>(clazzType, qualifiersOn(parameter)), specific));
@@ -417,7 +482,7 @@ sealed abstract class ObjectProvider<T> {
         final List<GetterInjection<?>> getterInjections = new ArrayList<>();
         final List<Binding<?>> bindings = new ArrayList<>();
 
-        boolean isComponent = type.isAnnotationPresent(Component.class);
+        boolean isComponent = type.type().isAnnotationPresent(Component.class);
 
         // We note that overridden methods are not considered
         Set<PackageMethodRef> packageMethodsVisited = new HashSet<>();
@@ -520,7 +585,7 @@ sealed abstract class ObjectProvider<T> {
                 }
             }
         };
-        typeConsumer.accept(type);
+        typeConsumer.accept(type.type());
 
         Collections.reverse(getterInjections);
         Collections.reverse(setterInjections);
@@ -538,7 +603,7 @@ sealed abstract class ObjectProvider<T> {
             }
 
             // We need the class to be public
-            if (!type.accessFlags().contains(AccessFlag.PUBLIC)) {
+            if (!type.type().accessFlags().contains(AccessFlag.PUBLIC)) {
                 throw new IllegalArgumentException("Class "+type+" must be public to have abstract @Inject methods or @Binds methods");
             }
 
@@ -550,7 +615,7 @@ sealed abstract class ObjectProvider<T> {
                 throw new IllegalArgumentException("Injectable constructor for class " + type + " must be public or protected to have abstract @Inject methods or @Binds methods");
             }
 
-            handle = implementAbstract(type, getterInjections, bindings, ((CtorInjection) ctorInjection).constructor(), instantiator);
+            handle = implementAbstract(type.type(), getterInjections, bindings, ((CtorInjection) ctorInjection).constructor(), instantiator);
         } else {
             try {
                 handle = switch (ctorInjection) {
@@ -570,7 +635,7 @@ sealed abstract class ObjectProvider<T> {
                     try {
                         // T, Vnew -> T
                         var fieldHandle = identityManySetter(privateIn(field.getDeclaringClass(), instantiator).unreflectSetter(field));
-                        var adaptedFieldHandle = fieldHandle.asType(fieldHandle.type().changeReturnType(type).changeParameterType(0, type));
+                        var adaptedFieldHandle = fieldHandle.asType(fieldHandle.type().changeReturnType(type.type()).changeParameterType(0, type.type()));
 
                         // V... , Vnew -> T
                         handle = MethodHandles.collectArguments(adaptedFieldHandle, 0, handle);
@@ -586,7 +651,7 @@ sealed abstract class ObjectProvider<T> {
                     try {
                         // T, Vnew... -> T
                         var methodHandle = identityManySetter(MethodHandles.dropReturn(privateIn(setter.getDeclaringClass(), instantiator).unreflect(setter)));
-                        var adaptedMethodHandle = methodHandle.asType(methodHandle.type().changeReturnType(type).changeParameterType(0, type));
+                        var adaptedMethodHandle = methodHandle.asType(methodHandle.type().changeReturnType(type.type()).changeParameterType(0, type.type()));
 
                         // V... , Vnew... -> T
                         handle = MethodHandles.collectArguments(adaptedMethodHandle, 0, handle);
@@ -600,7 +665,15 @@ sealed abstract class ObjectProvider<T> {
         }
 
         final var finalHandle = handle;
-        return new Creator<>(new QualifiedType<>(type, Set.of()), i -> finalHandle, handleTypes);
+
+        var actualQualifiers = new HashSet<Annotation>();
+        for (var qualifier : (provider == null ? ctor : provider).getAnnotations()) {
+            if (qualifier.annotationType().isAnnotationPresent(Qualifier.class)) {
+                actualQualifiers.add(qualifier);
+            }
+        }
+
+        return new Creator<>(new QualifiedType<>(type.type(), Set.copyOf(actualQualifiers)), i -> finalHandle, handleTypes);
     }
 
     static void specificForType(Class<?> parameterType, java.lang.reflect.Type fullType, Object context, BiConsumer<SpecificType, Class<?>> consumer) {

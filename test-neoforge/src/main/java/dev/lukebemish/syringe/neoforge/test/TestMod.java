@@ -6,6 +6,12 @@ import dev.lukebemish.syringe.Provides;
 import dev.lukebemish.syringe.neoforge.BusType;
 import dev.lukebemish.syringe.neoforge.ModScope;
 import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.Item;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
@@ -13,6 +19,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
+import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.Objects;
 
@@ -26,6 +33,9 @@ public abstract class TestMod {
 
     @Inject
     protected abstract ObjectFactory objectFactory();
+
+    @Inject @Named("minecraft:item")
+    protected abstract DeferredRegister<Item> itemRegister();
 
     @Inject
     public TestMod(ModContainer modContainer) {
@@ -51,6 +61,16 @@ public abstract class TestMod {
         gameBus().register(objectFactory().instance(GameBusListeners.class));
 
         System.out.println("Syringe test mod successfully loaded");
+
+        itemRegister().register("test_item", () ->
+            new Item(new Item.Properties().setId(ResourceKey.create(
+                Registries.ITEM,
+                ResourceLocation.fromNamespaceAndPath(
+                    modContainer.getModId(),
+                    "test_item"
+                )
+            )))
+        );
     }
 
     @ModScope
@@ -116,12 +136,17 @@ public abstract class TestMod {
         @Inject
         protected abstract TestMod modInstance();
 
+        @Inject
+        protected abstract ModContainer modContainer();
+
         @SubscribeEvent
         public void commonSetup(FMLCommonSetupEvent event) {
             Objects.requireNonNull(modInstance());
             if (modInstance() != toCheck) {
                 throw new IllegalStateException("@Mod instance not properly scoped");
             }
+
+            System.out.println("Found registered item: "+BuiltInRegistries.ITEM.getValue(ResourceLocation.fromNamespaceAndPath(modContainer().getModId(), "test_item")));
 
             System.out.println("InnerThingy common setup event");
         }
