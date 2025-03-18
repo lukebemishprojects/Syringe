@@ -8,27 +8,22 @@ group = 'dev.lukebemish'
 version = '0.1.0'
 
 sourceSets {
-    fml {}
-    fmlattachment {}
+    neoforge {}
 }
 
 java {
     withSourcesJar()
     withJavadocJar()
     toolchain.languageVersion.set JavaLanguageVersion.of(21)
-    registerFeature('fml') {
-        usingSourceSet(sourceSets.fml)
-    }
-    registerFeature('fmlattachment') {
-        usingSourceSet(sourceSets."fmlattachment")
-        disablePublication()
+    registerFeature('neoforge') {
+        usingSourceSet(sourceSets.neoforge)
     }
 }
 
 configurations {
-    dependencyScope('fmlJarJar')
-    resolvable('fmlJarJarClasspath') {
-        extendsFrom configurations.fmlJarJar
+    dependencyScope('neoforgeJarJar')
+    resolvable('neoforgeJarJarClasspath') {
+        extendsFrom configurations.neoforgeJarJar
         transitive = false
     }
 }
@@ -49,24 +44,13 @@ dependencies {
     testRuntimeOnly libs.junit.vintage.engine
     testRuntimeOnly libs.junit.platform.launcher
 
-    fmlCompileOnly cLibs.bundles.compileonly
-    fmlAnnotationProcessor cLibs.bundles.annotationprocessor
-    fmlattachmentCompileOnly cLibs.bundles.compileonly
-    fmlattachmentAnnotationProcessor cLibs.bundles.annotationprocessor
+    neoforgeCompileOnly cLibs.bundles.compileonly
+    neoforgeAnnotationProcessor cLibs.bundles.annotationprocessor
 
-    fmlattachmentCompileOnly libs.fml
-    fmlattachmentCompileOnly(libs.neoforge) {
-        transitive = false
-    }
-
-    fmlImplementation libs.fml
-    fmlApi project(':')
-    fmlJarJar(project(':')) {
-        capabilities {
-            requireFeature('fmlattachment')
-        }
-    }
-    fmlJarJar libs.jakarta.inject.api
+    neoforgeImplementation libs.fml
+    neoforgeApi project(':')
+    neoforgeJarJar project(':syringe-neoforge-attachment')
+    neoforgeJarJar libs.jakarta.inject.api
 }
 
 tasks.named('jar', Jar) {
@@ -79,28 +63,18 @@ tasks.named('jar', Jar) {
     }
 }
 
-tasks.named('fmlJar', Jar) {
+tasks.named('neoforgeJar', Jar) {
     manifest {
         attributes (
             'FMLModType': 'LIBRARY',
             'Implementation-Version': project.version as String,
-            'Automatic-Module-Name': 'dev.lukebemish.syringe.fml'
+            'Automatic-Module-Name': 'dev.lukebemish.syringe.neoforge'
         )
     }
 }
 
-tasks.named('fmlJarJar', JarJarTask) {
-    from(configurations.fmlJarJarClasspath)
-}
-
-tasks.named('fmlattachmentJar', Jar) {
-    manifest {
-        attributes (
-            'FMLModType': 'GAMELIBRARY',
-            'Implementation-Version': project.version as String,
-            'Automatic-Module-Name': 'dev.lukebemish.syringe.fml.attachment'
-        )
-    }
+tasks.named('neoforgeJarJar', JarJarTask) {
+    from(configurations.neoforgeJarJarClasspath)
 }
 
 test {

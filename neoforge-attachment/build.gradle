@@ -1,0 +1,47 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev'
+}
+
+group = 'dev.lukebemish'
+// TODO: managed versioning
+version = '0.1.0'
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    // Specify the version of NeoForge to use.
+    version = libs.versions.neoforge.get()
+}
+
+dependencies {
+    compileOnly cLibs.bundles.compileonly
+    annotationProcessor cLibs.bundles.annotationprocessor
+
+    implementation(project(':')) {
+        capabilities {
+            requireFeature('neoforge')
+        }
+    }
+}
+
+tasks.named('processResources', ProcessResources) {
+    var replaceProperties = [
+        neoforgeVersion: libs.versions.neoforge.get(),
+        version: version as String
+    ]
+    inputs.properties replaceProperties
+
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand replaceProperties
+    }
+}
+
+tasks.named('jar', Jar) {
+    manifest {
+        attributes (
+            'Implementation-Version': project.version as String,
+            'Automatic-Module-Name': 'dev.lukebemish.syringe.neoforge.attachment'
+        )
+    }
+}

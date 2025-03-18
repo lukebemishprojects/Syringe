@@ -636,12 +636,12 @@ sealed abstract class ObjectProvider<T> {
     }
 
     static MethodHandles.Lookup privateIn(Class<?> clazz, Instantiator instantiator) {
-        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        MethodHandles.Lookup lookup = instantiator.lookup();
         try {
             try {
-                lookup = MethodHandles.privateLookupIn(clazz, lookup);
-            } catch (IllegalAccessException ignored) {
                 lookup = instantiator.privateIn(clazz);
+            } catch (IllegalAccessException ignored) {
+                lookup = MethodHandles.privateLookupIn(clazz, MethodHandles.lookup());
             }
         } catch (IllegalAccessException ignored) {
             // We just won't have private access -- if that causes other issues, so be it.

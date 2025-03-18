@@ -19,6 +19,10 @@ public final class Instantiator {
         this.lookup = lookup;
     }
 
+    public MethodHandles.Lookup lookup() {
+        return lookup;
+    }
+
     public static final class Builder {
         private MethodHandles.Lookup lookup = MethodHandles.lookup();
 

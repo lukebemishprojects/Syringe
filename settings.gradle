@@ -30,4 +30,10 @@ dependencyResolutionManagement {
 
 rootProject.name = 'syringe'
 
-include('test-fml')
+include(':syringe-neoforge-attachment')
+include(':syringe-fabric-attachment')
+
+project(':syringe-neoforge-attachment').projectDir = file('neoforge-attachment')
+project(':syringe-fabric-attachment').projectDir = file('fabric-attachment')
+
+include(':test-neoforge')

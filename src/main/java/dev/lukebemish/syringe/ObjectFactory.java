@@ -28,14 +28,13 @@ public final class ObjectFactory {
     private final Map<QualifiedType<?>, ObjectProvider<?>> boundCreators = new HashMap<>();
     final @Nullable ObjectFactory parent;
 
-    private ObjectFactory(Set<Class<? extends Annotation>> scope, @Nullable ObjectFactory parent) {
+    private ObjectFactory(Set<Class<? extends Annotation>> scope, @Nullable ObjectFactory parent, Instantiator instantiator) {
         this.scope = scope;
         this.parent = parent;
 
         scoped.put(new QualifiedType<>(ObjectFactory.class, Set.of()), ObjectProvider.of(this));
 
-        var baseInstantiator = parent == null ? Instantiator.builder().build() : parent.findOrMakeProvider(new QualifiedType<>(Instantiator.class, Set.of())).create();
-        scoped.put(new QualifiedType<>(Instantiator.class, Set.of()), ObjectProvider.of(baseInstantiator));
+        scoped.put(new QualifiedType<>(Instantiator.class, Set.of()), ObjectProvider.of(instantiator));
     }
 
     @SuppressWarnings("unchecked")
@@ -133,7 +132,7 @@ public final class ObjectFactory {
     public ObjectFactory within(Object component) {
         var type = component.getClass();
         var scopes = new HashSet<Class<? extends Annotation>>();
-        var child = new ObjectFactory(scopes, this);
+        var child = new ObjectFactory(scopes, this, this.instantiator());
         Set<PackageMethodRef> packageMethodsVisited = new HashSet<>();
         Set<MethodRef> methodsVisited = new HashSet<>();
 
@@ -186,8 +185,8 @@ public final class ObjectFactory {
                                 throw new IllegalArgumentException("Method " + method + " is static, but methods with @Provides or @Binds must not be unless they are static factory methods with @Provides");
                             }
 
-                            var scopedFactory = findScopedFactory(method);
-                            if (scopedFactory != null && scopedFactory != ObjectFactory.this) {
+                            var scopedFactory = child.findScopedFactory(method);
+                            if (scopedFactory != null && scopedFactory != child) {
                                 throw new IllegalArgumentException("Component @Provides method " + method + " has scope that is not compatible with the component");
                             }
 
@@ -279,6 +278,10 @@ public final class ObjectFactory {
     }
 
     public static ObjectFactory create() {
-        return new ObjectFactory(Set.of(Singleton.class), null);
+        return create(Instantiator.builder().build());
+    }
+
+    public static ObjectFactory create(Instantiator instantiator) {
+        return new ObjectFactory(Set.of(Singleton.class), null, instantiator);
     }
 }
