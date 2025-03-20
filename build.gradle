@@ -103,7 +103,8 @@ java {
     }
     registerFeature('common') {
         usingSourceSet(sourceSets.common)
-        disablePublication()
+        withSourcesJar()
+        withJavadocJar()
     }
 }
 

@@ -62,6 +62,9 @@ abstract class UnzipAllTask extends DefaultTask {
 
     @TaskAction
     void run() {
+        fileSystemOperations.delete {
+            it.delete outputDirectory.get()
+        }
         inputArchives.each { file ->
             fileSystemOperations.copy {
                 it.from archiveOperations.zipTree(file)
