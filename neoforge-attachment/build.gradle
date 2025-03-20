@@ -1,11 +1,19 @@
 plugins {
     id 'java-library'
     id 'net.neoforged.moddev'
+    id 'dev.lukebemish.managedversioning'
 }
 
 group = 'dev.lukebemish'
-// TODO: managed versioning
-version = '0.1.0'
+
+managedVersioning {
+    versionFile.set rootProject.isolated.projectDirectory.file('version.properties')
+    gitWorkingDir.set rootProject.isolated.projectDirectory
+    versionPRs()
+    versionSnapshots()
+
+    apply()
+}
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
