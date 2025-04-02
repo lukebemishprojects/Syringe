@@ -3,7 +3,6 @@ package dev.lukebemish.syringe.neoforge.test;
 import dev.lukebemish.syringe.Assisted;
 import dev.lukebemish.syringe.ObjectFactory;
 import dev.lukebemish.syringe.Provides;
-import dev.lukebemish.syringe.neoforge.BusType;
 import dev.lukebemish.syringe.common.ModScope;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -15,7 +14,6 @@ import net.minecraft.world.item.Item;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
-import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.event.GameShuttingDownEvent;
@@ -26,10 +24,7 @@ import java.util.Objects;
 @Mod("syringe_testmod")
 public abstract class TestMod {
     @Inject
-    protected abstract IEventBus modBus();
-
-    @Inject @BusType(EventBusSubscriber.Bus.GAME)
-    protected abstract IEventBus gameBus();
+    protected abstract IEventBus eventBus();
 
     @Inject
     protected abstract ObjectFactory objectFactory();
@@ -40,7 +35,7 @@ public abstract class TestMod {
     @Inject
     public TestMod(ModContainer modContainer) {
         Objects.requireNonNull(modContainer);
-        Objects.requireNonNull(modBus());
+        Objects.requireNonNull(eventBus());
         Objects.requireNonNull(objectFactory());
 
         var innerThingy = objectFactory().instance(InnerThingy.class, "innerThingy", this);
@@ -56,9 +51,9 @@ public abstract class TestMod {
             throw new IllegalStateException("Scoped service instances are not the same, despite it being mod-scoped");
         }
 
-        modBus().register(innerThingy);
+        eventBus().register(innerThingy);
 
-        gameBus().register(objectFactory().instance(GameBusListeners.class));
+        eventBus().register(objectFactory().instance(GameBusListeners.class));
 
         System.out.println("Syringe test mod successfully loaded");
 

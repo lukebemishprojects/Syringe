@@ -1,7 +1,6 @@
 package dev.lukebemish.syringe.neoforge.attachment;
 
 import com.google.common.base.Suppliers;
-import dev.lukebemish.syringe.Binds;
 import dev.lukebemish.syringe.Component;
 import dev.lukebemish.syringe.Dynamic;
 import dev.lukebemish.syringe.ObjectFactory;
@@ -36,11 +35,19 @@ public abstract class ModComponent {
         var self = this;
         return list.getModContainerById(self.modId).orElseThrow();
     });
+    private final Supplier<IEventBus> delegatingBus;
+    private final Supplier<IEventBus> modBus;
 
     @Inject
-    public ModComponent(@Dynamic Named modId, ObjectFactory parentFactory) {
+    public ModComponent(@Dynamic Named modId, ObjectFactory parentFactory, GameComponent gameComponent) {
         this.modId = modId.value();
         this.factory = parentFactory.within(this);
+        this.delegatingBus = Suppliers.memoize(() ->
+            new SmartEventBus(modContainer.get().getEventBus(), gameComponent.gameBus())
+        );
+        this.modBus = Suppliers.memoize(() ->
+            new SuperclassAllowingEventBus(modContainer.get().getEventBus())
+        );
     }
 
     @Provides @ModScope
@@ -49,12 +56,14 @@ public abstract class ModComponent {
     }
 
     @Provides @ModScope
-    public IEventBus modBus() {
-        return Objects.requireNonNull(modContainer().getEventBus());
+    public IEventBus eventBus() {
+        return delegatingBus.get();
     }
 
-    @Binds @BusType(EventBusSubscriber.Bus.MOD) @ModScope
-    public abstract IEventBus modBusScoped(IEventBus bus);
+    @Provides @BusType(EventBusSubscriber.Bus.MOD) @ModScope
+    public IEventBus modBusScoped() {
+        return Objects.requireNonNull(modContainer().getEventBus());
+    }
 
     @Provides @ModScope
     public IModInfo modInfo() {
@@ -69,7 +78,7 @@ public abstract class ModComponent {
     public <T> DeferredRegister<T> deferredRegister(@Dynamic Named registryName) {
         var rl = ResourceLocation.parse(registryName.value());
         var register = DeferredRegister.<T>create(rl, modId);
-        register.register(modBus());
+        register.register(eventBus());
         return register;
     }
 }

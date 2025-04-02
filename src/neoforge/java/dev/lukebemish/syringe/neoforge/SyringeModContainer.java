@@ -28,14 +28,13 @@ class SyringeModContainer extends ModContainer {
     public SyringeModContainer(IModInfo info, List<String> entrypoints, ModFileScanData scanResults, ModuleLayer gameLayer, ObjectFactory syringeObjectFactory) {
         super(info);
         this.scanResults = scanResults;
-        this.eventBus = ModComponentBuilder.BUS_OPERATOR.apply(BusBuilder.builder()
+        this.eventBus = BusBuilder.builder()
             .setExceptionHandler((bus, event, listeners, index, throwable) ->
                 LOGGER.error(new EventBusErrorMessage(event, index, listeners, throwable))
             )
             .markerType(IModBusEvent.class)
             .allowPerPhasePost()
-            .build()
-        );
+            .build();
         Module module = gameLayer.findModule(info.getOwningFile().moduleName()).orElseThrow();
         this.objectFactory = ModComponentBuilder.handleFor(this, syringeObjectFactory);
 
